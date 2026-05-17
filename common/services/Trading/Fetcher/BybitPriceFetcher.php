@@ -24,13 +24,6 @@ final class BybitPriceFetcher
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000; // 2018-01-01 UTC
     public const DEFAULT_INTERVALS = ['D', 'W', '4h', '1h'];
 
-    /** HashHedge tickers with no usable Bybit pair (delisted, unsupported,
-     *  or only available under a different symbol convention). Skipping
-     *  them avoids re-hitting the API and cluttering the failures file. */
-    public const SYMBOL_EXCLUDE = [
-        'XAG', 'NFP', 'AI', 'PHB', 'TRU', 'JOE', 'HOOK', 'DODOX', 'BEAMX', 'MON',
-    ];
-
     public const INTERVAL_LABELS = [
         'M'   => 'M',
         'W'   => 'W',
@@ -109,14 +102,6 @@ final class BybitPriceFetcher
         foreach ($symbols as $i => $sym) {
             $prefix  = sprintf('[%3d/%d] %-8s', $i + 1, $total, $sym);
             $outPath = "$outDir/$sym.json";
-
-            if (in_array(strtoupper($sym), self::SYMBOL_EXCLUDE, true)) {
-                $log("$prefix - excluded, skipping");
-                unset($failures[$sym]);
-                $success++;
-                $skipped++;
-                continue;
-            }
 
             $existing = null;
             if (file_exists($outPath)) {
