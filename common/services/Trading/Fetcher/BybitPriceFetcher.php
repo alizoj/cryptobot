@@ -83,8 +83,9 @@ final class BybitPriceFetcher
 
         @mkdir($outDir, 0775, recursive: true);
 
-        $symbols   = $this->loadSymbols($symbolsFile);
+        $masterSymbols = $this->loadSymbols($symbolsFile);
         $overrides = $this->loadOverrides($overridesFile);
+        $symbols = $masterSymbols;
         if ($onlyList !== null) {
             $upper = array_map('strtoupper', $onlyList);
             $symbols = array_values(array_filter($symbols, static fn($s) => in_array($s, $upper, true)));
@@ -95,6 +96,8 @@ final class BybitPriceFetcher
         $this->instruments->ensureLoaded($refreshIndex, $log);
 
         $failures = $this->loadFailures($failuresFile);
+        // Drop failure entries for symbols no longer on the master list.
+        $failures = array_intersect_key($failures, array_flip(array_map('strtoupper', $masterSymbols)));
         $success = 0;
         $fetched = 0;
         $skipped = 0;

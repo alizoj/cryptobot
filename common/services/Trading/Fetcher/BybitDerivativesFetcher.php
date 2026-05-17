@@ -43,6 +43,7 @@ final class BybitDerivativesFetcher
         $refresh  = (bool)($opts['refresh'] ?? false);
 
         $dataDir       = Yii::getAlias('@common/data');
+        $symbolsFile   = $dataDir . DIRECTORY_SEPARATOR . 'hashhedge_symbols.json';
         $overridesFile = $dataDir . DIRECTORY_SEPARATOR . 'bybit_symbol_overrides.json';
         $outDir        = Paths::historyPricesDir();
         $failuresFile  = $outDir . DIRECTORY_SEPARATOR . '_derivatives_failures.json';
@@ -62,9 +63,16 @@ final class BybitDerivativesFetcher
             )
             : [];
 
+        // hashhedge_symbols.json is the single source of truth — only process
+        // files for symbols still on the list. Stale per-symbol JSON files
+        // (from pruned tickers) would otherwise get retried every run.
+        $symbolsJson = json_decode((string)file_get_contents($symbolsFile), true, flags: JSON_THROW_ON_ERROR);
+        $allowed = array_flip(array_map('strtoupper', $symbolsJson['symbols'] ?? []));
+
         $files = array_values(array_filter(
             glob("$outDir/*.json") ?: [],
-            static fn(string $f) => !str_starts_with(basename($f), '_'),
+            static fn(string $f) => !str_starts_with(basename($f), '_')
+                && isset($allowed[strtoupper(pathinfo($f, PATHINFO_FILENAME))]),
         ));
         if ($onlyList !== null) {
             $upper = array_map('strtoupper', $onlyList);
@@ -78,6 +86,8 @@ final class BybitDerivativesFetcher
         $failures = file_exists($failuresFile)
             ? json_decode((string)file_get_contents($failuresFile), true, flags: JSON_THROW_ON_ERROR)
             : [];
+        // Drop failure entries for symbols no longer on the master list.
+        $failures = array_intersect_key($failures, $allowed);
         $success = 0;
         $fetched = 0;
         $skipped = 0;
