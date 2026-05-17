@@ -4,118 +4,133 @@ declare(strict_types=1);
 
 namespace common\services\Trading;
 
-use Yii;
+use common\services\Trading\Fetcher\BybitDerivativesFetcher;
+use common\services\Trading\Fetcher\BybitHttp;
+use common\services\Trading\Fetcher\BybitPriceFetcher;
+use common\services\Trading\Fetcher\DominanceFetcher;
+use common\services\Trading\Fetcher\FetchResult;
+use common\services\Trading\Fetcher\FngFetcher;
+use common\services\Trading\Fetcher\InstrumentsIndex;
+use common\services\Trading\Fetcher\LogTap;
 
 /**
- * Thin orchestration layer over the existing standalone PHP fetcher
- * scripts under common/data/. Each step is shelled out via the same
- * PHP binary that's running this code; output is captured and returned.
+ * Top-level orchestrator over the four fetcher services.
  *
- * Keeping the underlying scripts as the source of truth means the data
- * format used by the simulator and the live bot stay identical.
+ * Each step is now a direct in-process service call (no more shelling out
+ * to standalone PHP scripts) so we can stream progress, capture stats, and
+ * stop on first failure cheaply.
  *
- * Steps (in order):
- *   1. fetch_bybit_data.php           — daily + 1h + 4h candles
- *   2. fetch_bybit_derivatives.php    — funding + open interest
- *   3. fetch_macro_dominance.php      — BTC.D / total mcap
- *   4. fetch_fng.php                  — Fear & Greed
+ * The standalone scripts under common/data/ stay in place for ops who
+ * prefer to run them manually — both paths produce byte-identical files.
  */
 final class DataFetcher
 {
-    private string $dataDir;
+    private BybitHttp $http;
+    private InstrumentsIndex $instruments;
+    private BybitPriceFetcher $price;
+    private BybitDerivativesFetcher $derivs;
+    private DominanceFetcher $dominance;
+    private FngFetcher $fng;
 
-    public function __construct(?string $dataDir = null)
-    {
-        $this->dataDir = $dataDir ?? Yii::getAlias('@common/data');
+    public function __construct(
+        ?BybitHttp $http = null,
+        ?InstrumentsIndex $instruments = null,
+        ?BybitPriceFetcher $price = null,
+        ?BybitDerivativesFetcher $derivs = null,
+        ?DominanceFetcher $dominance = null,
+        ?FngFetcher $fng = null,
+    ) {
+        $this->http        = $http        ?? new BybitHttp();
+        $this->instruments = $instruments ?? new InstrumentsIndex($this->http, Paths::instrumentsIndex());
+        $this->price       = $price       ?? new BybitPriceFetcher($this->http, $this->instruments);
+        $this->derivs      = $derivs      ?? new BybitDerivativesFetcher($this->http, $this->instruments);
+        $this->dominance   = $dominance   ?? new DominanceFetcher();
+        $this->fng         = $fng         ?? new FngFetcher();
     }
 
     /**
-     * Run all fetchers in order, stopping at the first failure.
+     * Run all four fetchers in order. `$progress` (if given) receives each
+     * log line emitted by the underlying fetchers in real time.
      *
-     * @return list<array{step:string,ok:bool,exitCode:int,output:string,seconds:float}>
+     * @return list<FetchResult>
      */
-    public function refreshAll(): array
+    public function refreshAll(array $opts = [], ?callable $progress = null): array
     {
         return [
-            $this->runStep('prices',      'fetch_bybit_data.php'),
-            $this->runStep('derivatives', 'fetch_bybit_derivatives.php'),
-            $this->runStep('dominance',   'fetch_macro_dominance.php'),
-            $this->runStep('fng',         'fetch_fng.php'),
+            $this->step('prices',      fn(LogTap $t) => $this->price->run($opts['prices']      ?? [], $t), $progress),
+            $this->step('derivatives', fn(LogTap $t) => $this->derivs->run($opts['derivatives'] ?? [], $t), $progress),
+            $this->step('dominance',   fn(LogTap $t) => $this->dominance->run($opts['dominance'] ?? [], $t), $progress),
+            $this->step('fng',         fn(LogTap $t) => $this->fng->run($opts['fng']            ?? [], $t), $progress),
         ];
     }
 
-    public function refreshPrices(): array
+    /** @return list<FetchResult> */
+    public function refreshPrices(array $opts = [], ?callable $progress = null): array
     {
-        return [$this->runStep('prices', 'fetch_bybit_data.php')];
+        return [$this->step('prices', fn(LogTap $t) => $this->price->run($opts, $t), $progress)];
     }
 
-    public function refreshDerivatives(): array
+    /** @return list<FetchResult> */
+    public function refreshDerivatives(array $opts = [], ?callable $progress = null): array
     {
-        return [$this->runStep('derivatives', 'fetch_bybit_derivatives.php')];
+        return [$this->step('derivatives', fn(LogTap $t) => $this->derivs->run($opts, $t), $progress)];
     }
 
-    public function refreshMacro(): array
+    /** @return list<FetchResult> */
+    public function refreshMacro(array $opts = [], ?callable $progress = null): array
     {
         return [
-            $this->runStep('dominance', 'fetch_macro_dominance.php'),
-            $this->runStep('fng',       'fetch_fng.php'),
+            $this->step('dominance', fn(LogTap $t) => $this->dominance->run($opts['dominance'] ?? [], $t), $progress),
+            $this->step('fng',       fn(LogTap $t) => $this->fng->run($opts['fng'] ?? [],       $t), $progress),
         ];
     }
 
-    /**
-     * @return array{step:string,ok:bool,exitCode:int,output:string,seconds:float}
-     */
-    private function runStep(string $label, string $scriptBasename, array $args = []): array
-    {
-        $script = $this->dataDir . DIRECTORY_SEPARATOR . $scriptBasename;
-        if (!is_file($script)) {
-            return [
-                'step'     => $label,
-                'ok'       => false,
-                'exitCode' => 1,
-                'output'   => "script not found: $script",
-                'seconds'  => 0.0,
-            ];
-        }
-        $phpBin = PHP_BINARY ?: 'php';
-        $cmd = escapeshellarg($phpBin) . ' ' . escapeshellarg($script);
-        foreach ($args as $a) {
-            $cmd .= ' ' . escapeshellarg((string)$a);
-        }
-        $cmd .= ' 2>&1';
-
-        $started = microtime(true);
-        $out = [];
-        $code = 0;
-        exec($cmd, $out, $code);
-        $elapsed = microtime(true) - $started;
-        return [
-            'step'     => $label,
-            'ok'       => $code === 0,
-            'exitCode' => $code,
-            'output'   => implode("\n", $out),
-            'seconds'  => round($elapsed, 2),
-        ];
-    }
-
-    /**
-     * Persist a small checkpoint (last successful refresh + per-step status).
-     */
+    /** Persist a small checkpoint into common/data/trade_state/fetch_state.json. */
     public function recordCheckpoint(array $stepResults): void
     {
         $payload = [
             'ts'    => time(),
             'utc'   => gmdate('c'),
-            'steps' => array_map(static function (array $r): array {
-                return [
-                    'step'     => $r['step'],
-                    'ok'       => $r['ok'],
-                    'exitCode' => $r['exitCode'],
-                    'seconds'  => $r['seconds'],
-                    'tail'     => substr($r['output'], -400),
-                ];
+            'steps' => array_map(static function (FetchResult $r): array {
+                $a = $r->toArray();
+                $a['output'] = substr($a['output'], -400);
+                return $a;
             }, $stepResults),
         ];
-        file_put_contents(Paths::fetchState(), json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES), LOCK_EX);
+        file_put_contents(
+            Paths::fetchState(),
+            json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES),
+            LOCK_EX,
+        );
+    }
+
+    /** @param callable(LogTap):FetchResult $run */
+    private function step(string $label, callable $run, ?callable $forward): FetchResult
+    {
+        $tap = new LogTap($forward);
+        try {
+            $result = $run($tap);
+        } catch (\Throwable $e) {
+            $tap("FATAL: " . $e::class . ': ' . $e->getMessage());
+            return new FetchResult(
+                step: $label,
+                ok: false,
+                exitCode: 1,
+                seconds: 0.0,
+                summary: "exception: " . $e->getMessage(),
+                stats: [],
+                logTail: $tap->tail(40),
+            );
+        }
+        // Attach the captured tail so callers can persist it for diagnostics.
+        return new FetchResult(
+            step: $result->step,
+            ok: $result->ok,
+            exitCode: $result->exitCode,
+            seconds: $result->seconds,
+            summary: $result->summary,
+            stats: $result->stats,
+            logTail: $tap->tail(40),
+        );
     }
 }

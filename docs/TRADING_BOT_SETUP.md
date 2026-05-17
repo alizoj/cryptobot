@@ -52,14 +52,18 @@ The first run pulls ~5 years of OHLC/funding/OI history (~1.2 GB on disk):
 ./yii trading/fetch-data
 ```
 
-That re-uses the existing fetchers under `common/data/`:
+Each step is now a direct in-process service call (no shelling out):
 
-- `fetch_bybit_data.php` — daily, 4h, 1h candles for every symbol
-- `fetch_bybit_derivatives.php` — funding rate + OI history
-- `fetch_macro_dominance.php` — CMC BTC.D and total mcap
-- `fetch_fng.php` — alternative.me Fear & Greed index
+| Step | Service class | Source |
+|---|---|---|
+| prices | `common\services\Trading\Fetcher\BybitPriceFetcher` | daily, 4h, 1h candles per symbol |
+| derivatives | `common\services\Trading\Fetcher\BybitDerivativesFetcher` | funding rate + OI history |
+| dominance | `common\services\Trading\Fetcher\DominanceFetcher` | CMC BTC.D + total/alt mcap |
+| fng | `common\services\Trading\Fetcher\FngFetcher` | alternative.me Fear & Greed |
 
-Incremental re-runs are cheap (each fetcher only pulls deltas).
+Each is idempotent and pulls only deltas. The on-disk format is
+byte-compatible with the standalone scripts under `common/data/fetch_*.php`,
+which are kept in place as a manual-CLI fallback.
 
 ## 3. Manual scan / preview
 

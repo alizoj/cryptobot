@@ -65,14 +65,16 @@ final class TradingController extends Controller
     {
         $this->stdout("[fetch-data] " . gmdate('c') . "\n", Console::FG_GREEN);
         $fetcher = new DataFetcher();
-        $results = $fetcher->refreshAll();
+        $results = $fetcher->refreshAll([], fn(string $line) => $this->stdout("    $line\n"));
         $fetcher->recordCheckpoint($results);
         $allOk = true;
         foreach ($results as $r) {
-            $tag = $r['ok'] ? 'OK ' : 'FAIL';
-            $this->stdout(sprintf("  %s  %-12s  %.1fs  exit=%d\n", $tag, $r['step'], $r['seconds'], $r['exitCode']),
-                $r['ok'] ? Console::FG_GREEN : Console::FG_RED);
-            $allOk = $allOk && $r['ok'];
+            $tag = $r->ok ? 'OK ' : 'FAIL';
+            $this->stdout(
+                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $r->step, $r->seconds, $r->summary),
+                $r->ok ? Console::FG_GREEN : Console::FG_RED,
+            );
+            $allOk = $allOk && $r->ok;
         }
         return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
     }
@@ -213,10 +215,18 @@ final class TradingController extends Controller
     public function actionRunHourly(): int
     {
         $this->stdout("[run-hourly] " . gmdate('c') . "\n", Console::FG_GREEN);
-        // Cheap incremental refresh — derivatives + price (skip macro to keep it under a minute).
+        // Cheap incremental refresh — prices + derivatives (skip macro to keep it under a minute).
         $f = new DataFetcher();
-        $r = array_merge($f->refreshPrices(), $f->refreshDerivatives());
+        $forward = fn(string $line) => $this->stdout("    $line\n");
+        $r = array_merge($f->refreshPrices([], $forward), $f->refreshDerivatives([], $forward));
         $f->recordCheckpoint($r);
+        foreach ($r as $res) {
+            $tag = $res->ok ? 'OK ' : 'FAIL';
+            $this->stdout(
+                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $res->step, $res->seconds, $res->summary),
+                $res->ok ? Console::FG_GREEN : Console::FG_RED,
+            );
+        }
         return $this->actionManagePositions();
     }
 
