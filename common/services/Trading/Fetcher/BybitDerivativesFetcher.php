@@ -22,6 +22,13 @@ final class BybitDerivativesFetcher
     public const OI_INTERVAL = '1d';
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000;
 
+    /** Symbols whose Bybit linear perp is listed under a different ticker
+     *  (e.g. 1000SHIBUSDT, 1000PEPEUSDT) or simply unavailable. Skipping
+     *  them avoids re-hitting the API and cluttering the failures file. */
+    public const DERIVATIVES_EXCLUDE = [
+        'BONK', 'PEPE', 'PUMP', 'RATS', 'SHIB', 'SPELL', 'FET', 'FLOKI',
+    ];
+
     private BybitHttp $http;
     private InstrumentsIndex $instruments;
 
@@ -85,6 +92,14 @@ final class BybitDerivativesFetcher
         foreach ($files as $i => $file) {
             $sym = pathinfo($file, PATHINFO_FILENAME);
             $prefix = sprintf('[%3d/%d] %-8s', $i + 1, count($files), $sym);
+
+            if (in_array(strtoupper($sym), self::DERIVATIVES_EXCLUDE, true)) {
+                $log("$prefix - excluded from derivatives fetch");
+                unset($failures[$sym]);
+                $success++;
+                $skipped++;
+                continue;
+            }
 
             $record = json_decode((string)file_get_contents($file), true, flags: JSON_THROW_ON_ERROR);
             if (!$refresh && isset($record['derivatives']['funding']['rows'], $record['derivatives']['open_interest']['rows'])) {
