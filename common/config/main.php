@@ -14,6 +14,14 @@ return [
     'components' => [
         'cache' => [
             'class' => \yii\redis\Cache::class,
+            'keyPrefix' => 'crypto_',
+            'defaultDuration' => 300,
+        ],
+        'urlManager' => [
+            'enablePrettyUrl' => true,
+            'showScriptName' => false,
+            'rules' => [
+            ],
         ],
     ],
 ];
