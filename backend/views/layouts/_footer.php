@@ -12,31 +12,8 @@ use yii\helpers\Html;
         <div class="row text-body-secondary">
             <div class="col-md-6 text-center text-md-start">&copy; <?= Html::encode(Yii::$app->name) ?> <?= date('Y') ?></div>
             <div class="col-md-6 text-center text-md-end">
-                <a href="https://www.yiiframework.com/" rel="external" class="text-body-secondary text-decoration-none">
-                    <?= Yii::t(
-                        'yii',
-                        'Powered by {yii}',
-                        [
-                            'yii' => '',
-                        ],
-                    ) ?>
-                    <?= Html::img(
-                        '@web/images/yii3_full_for_light.svg',
-                        [
-                            'alt' => 'Yii Framework',
-                            'class' => 'align-text-bottom footer-logo-light',
-                            'height' => '28',
-                        ],
-                    ) ?>
-                    <?= Html::img(
-                        '@web/images/yii3_full_for_dark.svg',
-                        [
-                            'alt' => 'Yii Framework',
-                            'class' => 'align-text-bottom footer-logo-dark',
-                            'height' => '28',
-                        ],
-                    ) ?>
-                </a>
+                <span class="fw-semibold">CodeLBK</span>
+                <span class="text-body-secondary">· Crypto trading admin</span>
             </div>
         </div>
     </div>

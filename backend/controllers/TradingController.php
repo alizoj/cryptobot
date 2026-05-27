@@ -18,8 +18,10 @@ use yii\web\Response;
 /**
  * Backend admin views for the Experiment-8 trading bot.
  *
- *   /trading                 dashboard: open positions + recent signals + diag
- *   /trading/scan-preview    dry-run scan for any UTC day (does not send)
+ *   /trading                 dashboard: KPIs + open positions + signals + closed P&L
+ *   /trading/scan-preview    dry-run daily scan for any UTC day (does not send)
+ *   /trading/scan4h-preview  dry-run 4h MTF scan (L5/S6) at a 4h close
+ *   /trading/chart           interactive candlestick for a symbol/signal
  *   /trading/test-telegram   POST: send a test message
  */
 final class TradingController extends Controller
@@ -60,6 +62,24 @@ final class TradingController extends Controller
             'asOf'        => $result['as_of'],
             'signals'     => $result['signals'],
             'diagnostics' => $result['diagnostics'],
+            'intraday'    => false,
+        ]);
+    }
+
+    /**
+     * Dry-run preview of the 4h MTF setups (L5 / S6) at a 4h close.
+     * $asOf accepts a UTC datetime ('2026-05-14 16:00'); default = latest bar.
+     */
+    public function actionScan4hPreview(?string $asOf = null): string
+    {
+        $asOfMs = ($asOf !== null && $asOf !== '') ? (int)(strtotime($asOf . ' UTC') * 1000) : null;
+        $engine = new SignalEngine();
+        $result = $engine->scanIntraday($asOfMs ?: null);
+        return $this->render('scan-preview', [
+            'asOf'        => $result['as_of'],
+            'signals'     => $result['signals'],
+            'diagnostics' => $result['diagnostics'],
+            'intraday'    => true,
         ]);
     }
 

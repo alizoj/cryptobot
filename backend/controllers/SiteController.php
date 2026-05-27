@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace backend\controllers;
 
 use common\models\LoginForm;
+use common\services\Trading\PositionStore;
+use common\services\Trading\TelegramNotifier;
 use Yii;
 use yii\filters\AccessControl;
 use yii\filters\VerbFilter;
@@ -65,7 +67,14 @@ class SiteController extends Controller
      */
     public function actionIndex(): string
     {
-        return $this->render('index');
+        $store = new PositionStore();
+        return $this->render('index', [
+            'openCount'   => count($store->openPositions()),
+            'closedCount' => count($store->closedPositions()),
+            'signalCount' => count($store->recentSignals(500)),
+            'telegramOn'  => (new TelegramNotifier())->isConfigured(),
+            'params'      => Yii::$app->params['trading'] ?? [],
+        ]);
     }
 
     /**

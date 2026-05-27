@@ -10,133 +10,252 @@ declare(strict_types=1);
 /** @var array<string, mixed> $params */
 
 use yii\helpers\Html;
-use yii\helpers\Url;
 
 $this->title = 'Trading Bot';
+$this->render('_kit');
 
+// ---- formatting helpers ----
 $fmtPx = static function ($v): string {
-    if ($v === null) return '-';
-    if ($v >= 100)   return number_format((float)$v, 2);
-    if ($v >= 1)     return number_format((float)$v, 4);
-    if ($v >= 0.01)  return number_format((float)$v, 5);
-    return rtrim(rtrim(sprintf('%.8f', (float)$v), '0'), '.');
+    if ($v === null) return '—';
+    $v = (float)$v;
+    if ($v >= 100)  return number_format($v, 2);
+    if ($v >= 1)    return number_format($v, 4);
+    if ($v >= 0.01) return number_format($v, 5);
+    return rtrim(rtrim(sprintf('%.8f', $v), '0'), '.');
+};
+$setupBadge = static function (?string $setup): string {
+    $setup = (string)$setup;
+    if ($setup === '' || $setup === '-') return '';
+    $cls = str_starts_with($setup, 'L') ? 'bg-success-subtle text-success-emphasis' : 'bg-danger-subtle text-danger-emphasis';
+    return '<span class="badge setup-badge ' . $cls . '">' . htmlspecialchars($setup) . '</span>';
+};
+$sidePill = static function (?string $side): string {
+    return ($side ?? '') === 'long'
+        ? '<span class="text-success fw-semibold">LONG</span>'
+        : (($side ?? '') === 'short' ? '<span class="text-danger fw-semibold">SHORT</span>' : '<span class="text-muted">—</span>');
+};
+$pnlCell = static function (?float $f): string {
+    if ($f === null) return '<span class="text-muted">—</span>';
+    $cls = $f >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return '<span class="' . $cls . ' num">' . ($f >= 0 ? '+' : '') . number_format($f * 100, 2) . '%</span>';
+};
+$pnlOf = static function (array $p): ?float {
+    $e = (float)($p['entry_px'] ?? 0);
+    $x = (float)($p['outcome']['exit_px'] ?? 0);
+    if ($e <= 0 || $x <= 0) return null;
+    return ($p['side'] ?? '') === 'long' ? ($x / $e - 1) : ($e / $x - 1);
+};
+$chartLink = static function (?string $symbol, $entry, $stop, ?string $side, ?string $setup, ?string $asOf): string {
+    if (!$symbol || $symbol === '-') return '';
+    return Html::a('📈', ['chart', 'symbol' => $symbol, 'entry' => $entry, 'stop' => $stop,
+        'side' => $side, 'setup' => $setup, 'asOf' => $asOf],
+        ['class' => 'text-decoration-none', 'target' => '_blank', 'title' => 'Open chart']);
 };
 
-$badge = static function (bool $ok, string $text): string {
-    $cls = $ok ? 'text-bg-success' : 'text-bg-danger';
-    return '<span class="badge ' . $cls . '">' . htmlspecialchars($text) . '</span>';
+// ---- KPIs ----
+$equity = (float)($params['equityUsd'] ?? 0);
+$openNotional = 0.0;
+$openRisk = 0.0;
+foreach ($open as $p) {
+    $openNotional += (float)($p['size']['notional_usd'] ?? 0);
+    $openRisk     += (float)($p['size']['risk_usd'] ?? 0);
+}
+$closedWins = 0;
+$closedScored = 0;
+$pnlSum = 0.0;
+foreach ($closed as $p) {
+    $pnl = $pnlOf($p);
+    if ($pnl === null) continue;
+    $closedScored++;
+    $pnlSum += $pnl;
+    if ($pnl > 0) $closedWins++;
+}
+$winRate = $closedScored > 0 ? $closedWins / $closedScored * 100 : null;
+$avgPnl  = $closedScored > 0 ? $pnlSum / $closedScored : null;
+$sentCount = 0;
+foreach ($signals as $s) {
+    if ($s['sent_ok'] ?? false) $sentCount++;
+}
+$sentRate = count($signals) > 0 ? $sentCount / count($signals) * 100 : null;
+
+$navBtn = static function (string $label, array $route, bool $active): string {
+    $cls = 'btn btn-sm ' . ($active ? 'btn-primary' : 'btn-outline-secondary');
+    return Html::a($label, $route, ['class' => $cls]);
 };
 ?>
 <div class="container py-4">
-    <h1 class="mb-3">Trading bot &mdash; Experiment 8 (v1 stops + T+20)</h1>
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3 tr-toolbar">
+        <div class="me-auto">
+            <h1 class="h3 mb-0">Trading bot</h1>
+            <div class="text-secondary small">Experiment 8 · v1 stops · T+<?= (int)($params['timeExitDays'] ?? 20) ?></div>
+        </div>
+        <div class="btn-group" role="group" aria-label="views">
+            <?= $navBtn('Dashboard', ['index'], true) ?>
+            <?= $navBtn('Daily scan', ['scan-preview'], false) ?>
+            <?= $navBtn('4h scan', ['scan4h-preview'], false) ?>
+        </div>
+        <?= Html::beginForm(['test-telegram'], 'post', ['class' => 'd-inline']) ?>
+            <?= Html::submitButton('Test Telegram', ['class' => 'btn btn-sm btn-outline-primary']) ?>
+        <?= Html::endForm() ?>
+        <?= Html::a('↻', ['index'], ['class' => 'btn btn-sm btn-outline-secondary', 'title' => 'Refresh']) ?>
+    </div>
 
     <?php foreach (['success', 'error'] as $type): ?>
         <?php if ($msg = Yii::$app->session->getFlash($type)): ?>
-            <div class="alert alert-<?= $type === 'success' ? 'success' : 'danger' ?>"><?= Html::encode($msg) ?></div>
+            <div class="alert alert-<?= $type === 'success' ? 'success' : 'danger' ?> py-2"><?= Html::encode($msg) ?></div>
         <?php endif; ?>
     <?php endforeach; ?>
 
-    <div class="card mb-4">
-        <div class="card-body">
-            <div class="d-flex flex-wrap gap-3 align-items-center">
-                <div>Telegram: <?= $badge($telegramConfigured, $telegramConfigured ? 'configured' : 'missing creds') ?></div>
-                <div>Equity: $<?= number_format((float)($params['equityUsd'] ?? 0), 2) ?></div>
-                <div>Risk/trade: <?= number_format((float)($params['riskPct'] ?? 0) * 100, 2) ?>%</div>
-                <div>Exit: T+<?= (int)($params['timeExitDays'] ?? 20) ?></div>
-                <div>L1 cluster filter: <?= ($params['applyL1ClusterFilter'] ?? false) ? 'ON' : 'OFF' ?></div>
-                <div>Funding: <?= htmlspecialchars((string)($params['fundingMode'] ?? 'mean')) ?></div>
-                <div class="ms-auto">
-                    <?= Html::a('Dry-run scan', ['scan-preview'], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                    <?= Html::beginForm(['test-telegram'], 'post', ['style' => 'display:inline']) ?>
-                        <?= Html::submitButton('Test Telegram', ['class' => 'btn btn-sm btn-outline-primary']) ?>
-                    <?= Html::endForm() ?>
+    <!-- KPI cards -->
+    <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-2">
+        <div class="col">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="kpi-label">Open positions</div>
+                <div class="kpi-val"><?= count($open) ?></div>
+                <div class="kpi-sub num">$<?= number_format($openNotional, 0) ?> notional</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="kpi-label">Open risk</div>
+                <div class="kpi-val num">$<?= number_format($openRisk, 0) ?></div>
+                <div class="kpi-sub"><?= $equity > 0 ? number_format($openRisk / $equity * 100, 2) . '% of equity' : '—' ?></div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="kpi-label">Win rate</div>
+                <div class="kpi-val"><?= $winRate === null ? '—' : number_format($winRate, 0) . '%' ?></div>
+                <div class="kpi-sub"><?= $closedScored ?> closed</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="kpi-label">Avg P&amp;L / trade</div>
+                <div class="kpi-val"><?= $avgPnl === null ? '<span class="text-muted">—</span>' : $pnlCell($avgPnl) ?></div>
+                <div class="kpi-sub">realised, closed</div>
+            </div></div>
+        </div>
+        <div class="col">
+            <div class="card kpi-card h-100"><div class="card-body">
+                <div class="kpi-label">Telegram</div>
+                <div class="kpi-val">
+                    <?php if ($telegramConfigured): ?>
+                        <span class="badge text-bg-success">on</span>
+                    <?php else: ?>
+                        <span class="badge text-bg-danger">off</span>
+                    <?php endif; ?>
                 </div>
-            </div>
+                <div class="kpi-sub"><?= $sentRate === null ? 'no signals' : number_format($sentRate, 0) . '% sent (' . count($signals) . ')' ?></div>
+            </div></div>
         </div>
     </div>
 
-    <h3>Open positions (<?= count($open) ?>)</h3>
+    <!-- config strip -->
+    <div class="card card-section mb-4"><div class="card-body py-2">
+        <div class="d-flex flex-wrap gap-3 small text-secondary align-items-center">
+            <span>Equity <span class="text-body num">$<?= number_format($equity, 0) ?></span></span>
+            <span>Risk/trade <span class="text-body num"><?= number_format((float)($params['riskPct'] ?? 0) * 100, 2) ?>%</span></span>
+            <span>Exit <span class="text-body">T+<?= (int)($params['timeExitDays'] ?? 20) ?></span></span>
+            <span>Funding <span class="text-body"><?= Html::encode((string)($params['fundingMode'] ?? 'mean')) ?></span></span>
+            <span>S6 floor <span class="text-body num">$<?= number_format((float)($params['s6MinTurnover20dUsd'] ?? 1000000) / 1e6, 1) ?>M</span></span>
+        </div>
+    </div></div>
+
+    <!-- open positions -->
+    <div class="section-h">Open positions <span class="count">(<?= count($open) ?>)</span></div>
     <?php if (empty($open)): ?>
-        <p class="text-muted">None open.</p>
+        <div class="card card-section"><div class="card-body text-secondary">No open positions.</div></div>
     <?php else: ?>
-        <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle">
+        <div class="card card-section"><div class="table-responsive">
+            <table class="table tr-table align-middle">
                 <thead><tr>
                     <th>Opened</th><th>Symbol</th><th>Setup</th><th>Side</th>
-                    <th>Entry</th><th>Stop</th><th>Units</th><th>Notional</th><th>Beta</th><th>Method</th>
+                    <th class="text-end">Entry</th><th class="text-end">Stop</th>
+                    <th class="text-end">Units</th><th class="text-end">Notional</th><th class="text-end">Risk</th><th></th>
                 </tr></thead>
                 <tbody>
-                <?php foreach ($open as $p): ?>
-                    <tr>
-                        <td><?= Html::encode($p['entry_day'] ?? '') ?></td>
+                <?php foreach ($open as $p): $side = $p['side'] ?? ''; ?>
+                    <tr class="row-<?= $side === 'short' ? 'short' : 'long' ?>">
+                        <td class="small text-secondary"><?= Html::encode($p['entry_day'] ?? '') ?></td>
                         <td><strong><?= Html::encode($p['symbol'] ?? '') ?></strong></td>
-                        <td><?= Html::encode($p['setup'] ?? '') ?></td>
-                        <td><?= ($p['side'] ?? '') === 'long' ? '<span class="text-success">LONG</span>' : '<span class="text-danger">SHORT</span>' ?></td>
-                        <td><?= $fmtPx($p['entry_px'] ?? null) ?></td>
-                        <td><?= $fmtPx($p['stop_px'] ?? null) ?></td>
-                        <td><?= number_format((float)($p['size']['size_units'] ?? 0), 4) ?></td>
-                        <td>$<?= number_format((float)($p['size']['notional_usd'] ?? 0), 2) ?></td>
-                        <td><?= number_format((float)($p['size']['beta_used'] ?? $p['beta'] ?? 1), 3) ?></td>
-                        <td class="text-muted small"><?= Html::encode($p['method'] ?? '') ?></td>
+                        <td><?= $setupBadge($p['setup'] ?? null) ?></td>
+                        <td><?= $sidePill($side) ?></td>
+                        <td class="text-end num"><?= $fmtPx($p['entry_px'] ?? null) ?></td>
+                        <td class="text-end num"><?= $fmtPx($p['stop_px'] ?? null) ?></td>
+                        <td class="text-end num"><?= number_format((float)($p['size']['size_units'] ?? 0), 4) ?></td>
+                        <td class="text-end num">$<?= number_format((float)($p['size']['notional_usd'] ?? 0), 0) ?></td>
+                        <td class="text-end num">$<?= number_format((float)($p['size']['risk_usd'] ?? 0), 0) ?></td>
+                        <td class="text-end"><?= $chartLink($p['symbol'] ?? null, $p['entry_px'] ?? null, $p['stop_px'] ?? null, $side, $p['setup'] ?? null, $p['entry_day'] ?? null) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
+        </div></div>
     <?php endif; ?>
 
-    <h3 class="mt-4">Recent signals (last <?= count($signals) ?>)</h3>
+    <!-- recent signals -->
+    <div class="section-h">Recent signals <span class="count">(<?= count($signals) ?>)</span></div>
     <?php if (empty($signals)): ?>
-        <p class="text-muted">No signal history yet. Run <code>./yii trading/scan</code>.</p>
+        <div class="card card-section"><div class="card-body text-secondary">No signal history yet. Run <code>./yii trading/scan</code> or <code>scan-4h</code>.</div></div>
     <?php else: ?>
-        <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle">
+        <div class="card card-section"><div class="table-responsive">
+            <table class="table tr-table align-middle">
                 <thead><tr>
-                    <th>When (UTC)</th><th>Kind</th><th>Symbol</th><th>Setup</th><th>Side</th><th>Sent</th><th>Detail</th>
+                    <th>When (UTC)</th><th>Kind</th><th>Symbol</th><th>Setup</th><th>Side</th><th>Sent</th><th>Detail</th><th></th>
                 </tr></thead>
                 <tbody>
-                <?php foreach ($signals as $s): ?>
+                <?php foreach (array_reverse($signals) as $s): ?>
                     <?php
-                        $sym  = $s['signal']['symbol'] ?? $s['event']['symbol'] ?? '-';
-                        $setup = $s['signal']['setup'] ?? $s['event']['setup'] ?? '-';
-                        $side  = $s['signal']['side']  ?? $s['event']['side']  ?? '-';
-                        $detail = $s['event']['kind'] ?? ($s['signal']['method'] ?? '');
+                        $sig   = $s['signal'] ?? $s['event'] ?? [];
+                        $sym   = $sig['symbol'] ?? '-';
+                        $setup = $sig['setup'] ?? '-';
+                        $side  = $sig['side'] ?? '';
+                        $detail = $s['event']['kind'] ?? ($sig['method'] ?? '');
                     ?>
-                    <tr>
-                        <td><?= gmdate('Y-m-d H:i', (int)($s['ts'] ?? 0)) ?></td>
-                        <td><?= Html::encode($s['kind'] ?? '') ?></td>
+                    <tr class="row-<?= $side === 'short' ? 'short' : 'long' ?>">
+                        <td class="small text-secondary num"><?= gmdate('Y-m-d H:i', (int)($s['ts'] ?? 0)) ?></td>
+                        <td><span class="badge text-bg-light text-secondary"><?= Html::encode($s['kind'] ?? '') ?></span></td>
                         <td><strong><?= Html::encode($sym) ?></strong></td>
-                        <td><?= Html::encode($setup) ?></td>
-                        <td><?= Html::encode(strtoupper((string)$side)) ?></td>
-                        <td><?= ($s['sent_ok'] ?? false) ? $badge(true, 'yes') : $badge(false, 'no') ?></td>
-                        <td class="small text-muted"><?= Html::encode((string)$detail) ?></td>
+                        <td><?= $setupBadge($setup) ?></td>
+                        <td><?= $sidePill($side) ?></td>
+                        <td><?= ($s['sent_ok'] ?? false) ? '<span class="badge text-bg-success">yes</span>' : '<span class="badge text-bg-secondary">no</span>' ?></td>
+                        <td class="small text-secondary"><?= Html::encode((string)$detail) ?></td>
+                        <td class="text-end"><?= $chartLink($sym !== '-' ? $sym : null, $sig['entry_px'] ?? null, $sig['stop_px'] ?? null, $side, $setup !== '-' ? $setup : null, $sig['as_of'] ?? null) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
+        </div></div>
     <?php endif; ?>
 
+    <!-- closed positions -->
     <?php if (!empty($closed)): ?>
-        <h3 class="mt-4">Recently closed (last <?= count($closed) ?>)</h3>
-        <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle">
-                <thead><tr><th>Opened</th><th>Closed</th><th>Symbol</th><th>Setup</th><th>Side</th><th>Entry</th><th>Exit</th><th>Reason</th></tr></thead>
+        <div class="section-h">Recently closed <span class="count">(<?= count($closed) ?>)</span></div>
+        <div class="card card-section"><div class="table-responsive">
+            <table class="table tr-table align-middle">
+                <thead><tr>
+                    <th>Opened</th><th>Closed</th><th>Symbol</th><th>Setup</th><th>Side</th>
+                    <th class="text-end">Entry</th><th class="text-end">Exit</th><th class="text-end">P&amp;L</th><th>Reason</th>
+                </tr></thead>
                 <tbody>
-                <?php foreach (array_reverse($closed) as $p): ?>
-                    <tr>
-                        <td><?= Html::encode($p['entry_day'] ?? '') ?></td>
-                        <td><?= Html::encode($p['outcome']['exit_day'] ?? '') ?></td>
+                <?php foreach (array_reverse($closed) as $p): $side = $p['side'] ?? ''; ?>
+                    <tr class="row-<?= $side === 'short' ? 'short' : 'long' ?>">
+                        <td class="small text-secondary"><?= Html::encode($p['entry_day'] ?? '') ?></td>
+                        <td class="small text-secondary"><?= Html::encode($p['outcome']['exit_day'] ?? '') ?></td>
                         <td><strong><?= Html::encode($p['symbol'] ?? '') ?></strong></td>
-                        <td><?= Html::encode($p['setup'] ?? '') ?></td>
-                        <td><?= Html::encode(strtoupper((string)($p['side'] ?? ''))) ?></td>
-                        <td><?= $fmtPx($p['entry_px'] ?? null) ?></td>
-                        <td><?= $fmtPx($p['outcome']['exit_px'] ?? null) ?></td>
-                        <td class="small text-muted"><?= Html::encode((string)($p['outcome']['exit_reason'] ?? '')) ?></td>
+                        <td><?= $setupBadge($p['setup'] ?? null) ?></td>
+                        <td><?= $sidePill($side) ?></td>
+                        <td class="text-end num"><?= $fmtPx($p['entry_px'] ?? null) ?></td>
+                        <td class="text-end num"><?= $fmtPx($p['outcome']['exit_px'] ?? null) ?></td>
+                        <td class="text-end"><?= $pnlCell($pnlOf($p)) ?></td>
+                        <td class="small text-secondary"><?= Html::encode((string)($p['outcome']['exit_reason'] ?? '')) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
+        </div></div>
     <?php endif; ?>
+
 </div>

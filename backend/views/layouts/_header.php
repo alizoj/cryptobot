@@ -14,6 +14,17 @@ $items = [
         'url' => ['/site/index'],
     ],
     [
+        'label' => 'Trading',
+        'url' => ['/trading/index'],
+        'visible' => !Yii::$app->user->isGuest,
+        'items' => [
+            ['label' => 'Dashboard', 'url' => ['/trading/index']],
+            ['label' => 'Daily scan', 'url' => ['/trading/scan-preview']],
+            ['label' => '4h scan', 'url' => ['/trading/scan4h-preview']],
+            ['label' => 'Symbol chart', 'url' => ['/trading/chart', 'symbol' => 'BTC']],
+        ],
+    ],
+    [
         'label' => 'Login',
         'url' => ['/site/login'],
         'visible' => Yii::$app->user->isGuest,
@@ -32,7 +43,9 @@ $items = [
 <header id="header">
     <?php NavBar::begin(
         [
-            'brandLabel' => Yii::$app->name,
+            'brandLabel' => Html::img('@web/images/codelbk_logo.png', [
+                    'alt' => 'CodeLBK', 'height' => 28, 'class' => 'd-inline-block align-text-top me-2',
+                ]) . Html::encode(Yii::$app->name),
             'brandUrl' => Yii::$app->homeUrl,
             'options' => ['class' => 'navbar-expand-md navbar-dark bg-dark fixed-top']
         ],
