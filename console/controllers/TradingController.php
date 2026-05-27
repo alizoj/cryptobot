@@ -23,6 +23,7 @@ use yii\helpers\Console;
  *   ./yii trading/fetch-data          — refresh prices, derivs, dominance, FNG
  *   ./yii trading/scan                — evaluate Experiment 8 triggers + send entry signals (daily)
  *   ./yii trading/scan-4h             — evaluate the 4h MTF setups (L5/S6) at the latest 4h close
+ *   ./yii trading/run-4h              — refresh prices + derivatives, then scan-4h (one self-contained 4h job)
  *   ./yii trading/manage-positions    — trail / funding-flip / T+20 / stop-hit lifecycle
  *   ./yii trading/run-daily           — fetch-data + scan + manage-positions
  *   ./yii trading/run-hourly          — manage-positions (intra-day funding-flip + price moves)
@@ -55,7 +56,7 @@ final class TradingController extends Controller
         return match ($actionID) {
             'scan', 'manage-positions', 'run-daily', 'run-hourly'
                 => ['asOf', 'dryRun', 'includeDormant'],
-            'scan-4h' => ['asOf', 'dryRun'],
+            'scan-4h', 'run-4h' => ['asOf', 'dryRun'],
             default => [],
         };
     }
@@ -336,6 +337,28 @@ final class TradingController extends Controller
             );
         }
         return $this->actionManagePositions();
+    }
+
+    /**
+     * Self-contained 4h job: refresh prices + derivatives (so the just-closed
+     * 4h bar is on disk), then run the 4h MTF scan. Use this on a 4h cron
+     * instead of relying on run-hourly + scan-4h ordering.
+     */
+    public function actionRun4h(): int
+    {
+        $this->stdout("[run-4h] " . gmdate('c') . "\n", Console::FG_GREEN);
+        $f = new DataFetcher();
+        $forward = fn(string $line) => $this->stdout("    $line\n");
+        $r = array_merge($f->refreshPrices([], $forward), $f->refreshDerivatives([], $forward));
+        $f->recordCheckpoint($r);
+        foreach ($r as $res) {
+            $tag = $res->ok ? 'OK ' : 'FAIL';
+            $this->stdout(
+                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $res->step, $res->seconds, $res->summary),
+                $res->ok ? Console::FG_GREEN : Console::FG_RED,
+            );
+        }
+        return $this->actionScan4h();
     }
 
     // ---------- ops ----------
