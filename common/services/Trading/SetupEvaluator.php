@@ -12,8 +12,14 @@ namespace common\services\Trading;
  * Follows TRADE.md §1-§2 verbatim; S1 and S2 are kept here for completeness
  * but the caller (SignalEngine) suppresses them via the DORMANT list.
  *
+ * L5 (pullback dip-buy) and S6 (4h blow-off rejection) are multi-timeframe
+ * setups added from the entry-pattern study (docs/results/MTF_ENTRY_ANALYSIS*).
+ * They read the $ctx['mtf'] block produced by MtfContext. S6 keys off the
+ * most-recent completed 4h bar, so it only fires fresh if the scan runs on a
+ * 4h cadence (a daily-only scan catches just the 20:00-00:00 bar).
+ *
  * "Memecoin price-only" symbols skip funding/OI conditions (so they can
- * still hit L3/S3/S4 via the price gates alone).
+ * still hit L3/S3/S4/L5/S6 via the price gates alone).
  */
 final class SetupEvaluator
 {
@@ -162,6 +168,91 @@ final class SetupEvaluator
             ];
         }
 
+        // ---- MTF setups (L5 / S6) — evaluated here at the daily close, and
+        //      also reusable intraday via evaluateMtf() for the 4h-cadence scan.
+        foreach ($this->evaluateMtf($ctx['mtf'] ?? [], $c) as $fire) {
+            $fires[] = $fire;
+        }
+
         return $fires;
+    }
+
+    /**
+     * Evaluate the multi-timeframe setups (L5, S6) against an MtfContext block
+     * and a reference close price. Called both from evaluate() (daily close)
+     * and from SignalEngine::scanIntraday() at each 4h bar close — where the
+     * 4h-timeframe S6 actually fires fresh.
+     *
+     * @param array<string, mixed> $mtf  block from MtfContext::compute / computeAt
+     * @param float                $c    reference close (daily close, or the 4h-bar close intraday)
+     * @return list<array{setup:string,dir:string,method:string,entry_px:?float,stop_px:float,window_h:int,reasons:array<string,mixed>}>
+     */
+    public function evaluateMtf(array $mtf, float $c): array
+    {
+        $fires = [];
+        if (($l5 = $this->tryL5($mtf, $c)) !== null) {
+            $fires[] = $l5;
+        }
+        if (($s6 = $this->tryS6($mtf, $c)) !== null) {
+            $fires[] = $s6;
+        }
+        return $fires;
+    }
+
+    /**
+     * L5 pullback dip-buy long [MTF]. Daily pullback + a lower-timeframe
+     * oversold reading. Best large-n long in the full-universe study
+     * (d_down + h4/h1 rsi<40: edge ~2.3-2.4, 54-66% win) — the biggest winners
+     * (ENJ/HIGH) were dips in *weekly downtrends*, so we do NOT gate on w_up;
+     * it's recorded as context only. No fixed TP (time/trail exit).
+     */
+    private function tryL5(array $mtf, float $c): ?array
+    {
+        $d_down = $mtf['d_down'] ?? false;
+        $h4_rsi = $mtf['h4_rsi'] ?? null;
+        $h1_rsi = $mtf['h1_rsi'] ?? null;
+        $oversold = ($h4_rsi !== null && $h4_rsi < 40) || ($h1_rsi !== null && $h1_rsi < 40);
+        if (!$d_down || !$oversold) {
+            return null;
+        }
+        $swingLow = (float)($mtf['d_low3'] ?? $c);     // 3-day low already includes today's low
+        $stop     = max($swingLow * 0.97, $c * 0.90);  // recent-low buffer, capped at -10%
+        return [
+            'setup'    => 'L5',
+            'dir'      => 'long',
+            'method'   => 'market_open',
+            'entry_px' => null,
+            'stop_px'  => $stop,
+            'window_h' => self::ENTRY_WINDOW_24H,
+            'reasons'  => ['d_down' => 1, 'h4_rsi' => $h4_rsi, 'h1_rsi' => $h1_rsi, 'w_up' => ($mtf['w_up'] ?? null) === true ? 1 : 0],
+        ];
+    }
+
+    /**
+     * S6 4h blow-off rejection short [MTF]. Fade a 4h blow-off (pump + upper-
+     * wick rejection) in a daily uptrend. Highest-edge short bucket in the
+     * study (d_up + h4_upper_wick: f5d +15%, 73% win). The d_up gate keeps S6
+     * from shorting capitulation *bounces* (a 4h pop off a crash low fires
+     * d_down, not d_up). Edge<1 (blow-off ranges huge) -> wide stop, small size.
+     */
+    private function tryS6(array $mtf, float $c): ?array
+    {
+        $d_up   = $mtf['d_up'] ?? false;
+        $h4last = $mtf['h4_last'] ?? null;
+        if (!$d_up || $h4last === null
+            || $h4last['ret'] < 0.04 || $h4last['upper_wick'] < 0.15
+        ) {
+            return null;
+        }
+        $stop = max((float)$h4last['high'], $c) * 1.005;  // above the 4h blow-off high
+        return [
+            'setup'    => 'S6',
+            'dir'      => 'short',
+            'method'   => 'market_open',
+            'entry_px' => null,
+            'stop_px'  => $stop,
+            'window_h' => self::ENTRY_WINDOW_24H,
+            'reasons'  => ['d_up' => 1, 'h4_ret' => $h4last['ret'], 'h4_upper_wick' => $h4last['upper_wick'], 'h4_rsi' => $mtf['h4_rsi'] ?? null],
+        ];
     }
 }

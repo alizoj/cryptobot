@@ -130,6 +130,27 @@ final class MarketData
         return $out;
     }
 
+    /** @return list<array{ts:int,o:float,h:float,l:float,c:float}> weekly (interval W) */
+    public function weeklyCandles(string $symbol): array
+    {
+        $rec = $this->loadSymbol($symbol);
+        if (!$rec) {
+            return [];
+        }
+        $rows = $rec['history']['intervals']['W']['rows'] ?? [];
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'ts' => (int)$r[0],
+                'o'  => (float)$r[1],
+                'h'  => (float)$r[2],
+                'l'  => (float)$r[3],
+                'c'  => (float)$r[4],
+            ];
+        }
+        return $out;
+    }
+
     public function hasDerivatives(string $symbol): bool
     {
         $rec = $this->loadSymbol($symbol);

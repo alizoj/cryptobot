@@ -43,7 +43,7 @@ $fmtPx = static function ($v): string {
             <table class="table table-sm table-striped align-middle">
                 <thead><tr>
                     <th>Setup</th><th>Symbol</th><th>Side</th><th>Method</th>
-                    <th>Entry</th><th>Stop</th><th>Risk%</th><th>Notional</th><th>Beta</th><th>Reasons</th>
+                    <th>Entry</th><th>Stop</th><th>Risk%</th><th>Notional</th><th>Beta</th><th>Chart</th><th>Reasons</th>
                 </tr></thead>
                 <tbody>
                 <?php foreach ($signals as $s): ?>
@@ -58,6 +58,14 @@ $fmtPx = static function ($v): string {
                         <td><?= number_format((float)$s['size']['risk_per_unit_pct'] * 100, 2) ?>%</td>
                         <td>$<?= number_format((float)$s['size']['notional_usd'], 2) ?></td>
                         <td><?= number_format((float)($s['beta'] ?? 1), 3) ?></td>
+                        <td><?= Html::a('view', ['chart',
+                            'symbol' => $s['symbol'],
+                            'entry'  => $s['entry_px'] ?? $s['entry_estimate'] ?? null,
+                            'stop'   => $s['stop_px'],
+                            'side'   => $s['side'],
+                            'setup'  => $s['setup'],
+                            'asOf'   => $asOf,
+                        ], ['class' => 'small', 'target' => '_blank']) ?></td>
                         <td class="small text-muted"><?php
                             $bits = [];
                             foreach ($s['reasons'] as $k => $v) {

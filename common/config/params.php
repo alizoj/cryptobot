@@ -20,6 +20,14 @@ return [
         // optional override of api host for testing
         'apiBase'   => 'https://api.telegram.org',
     ],
+    // ----- Chart rendering (QuickChart for Telegram images) -----
+    'chart' => [
+        'enabled'       => true,                      // attach a candlestick image to each entry signal
+        'quickChartBase'=> 'https://quickchart.io',   // override to a self-hosted instance if desired
+        'width'         => 800,
+        'height'        => 450,
+        'lookbackDays'  => 60,                         // how many trailing daily candles to plot
+    ],
     'trading' => [
         // ---- sizing / risk ----
         'equityUsd'             => 10000.0,
@@ -43,6 +51,11 @@ return [
         // ---- universe ----
         'minDailyCandles'       => 60,
         'minTurnover20dUsd'     => 5_000_000,
+        // S6 (4h blow-off rejection short) trades a looser, lower-liquidity
+        // universe — its edge lives on thinner alts the $5M gate screens out
+        // (backtest: 92.5% win / PF 3.64 on the full universe vs 2 fills at $5M).
+        // Wide stops + risk-based sizing keep notional small. Intraday scan only.
+        's6MinTurnover20dUsd'   => 1_000_000,
         'blacklist'             => ['XAU', 'USTC', 'WLFI', 'LINEA', '1INCH', 'ACE', 'ACH'],
         'memecoinPriceOnly'     => ['PEPE', 'BONK', 'SHIB', 'FLOKI', 'RATS'],
 

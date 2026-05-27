@@ -79,6 +79,54 @@ final class TelegramNotifier
     }
 
     /**
+     * Send a photo by URL (Telegram fetches the image itself). Used for the
+     * QuickChart candlestick images produced by ChartRenderer.
+     *
+     * @return array{ok:bool,error:?string,response:?array<string,mixed>}
+     */
+    public function sendPhoto(string $photoUrl, ?string $caption = null): array
+    {
+        if (!$this->isConfigured()) {
+            return ['ok' => false, 'error' => 'telegram_not_configured', 'response' => null];
+        }
+        $url  = $this->apiBase . '/bot' . $this->botToken . '/sendPhoto';
+        $body = [
+            'chat_id' => $this->chatId,
+            'photo'   => $photoUrl,
+        ];
+        if ($caption !== null && $caption !== '') {
+            // Telegram caps captions at 1024 chars.
+            $body['caption']    = mb_substr($caption, 0, 1024);
+            $body['parse_mode'] = $this->parseMode;
+        }
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => http_build_query($body),
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_CONNECTTIMEOUT => 8,
+        ]);
+        $respBody = curl_exec($ch);
+        $err      = curl_error($ch);
+        $code     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($respBody === false) {
+            return ['ok' => false, 'error' => "curl: $err", 'response' => null];
+        }
+        $resp = json_decode((string)$respBody, true);
+        if (!is_array($resp)) {
+            return ['ok' => false, 'error' => "non-json (HTTP $code)", 'response' => null];
+        }
+        if (!($resp['ok'] ?? false)) {
+            return ['ok' => false, 'error' => ($resp['description'] ?? "HTTP $code"), 'response' => $resp];
+        }
+        return ['ok' => true, 'error' => null, 'response' => $resp];
+    }
+
+    /**
      * Pretty entry-signal card. Plain-text-ish HTML (no markdown) — safe for
      * channels where parse mode is HTML.
      *

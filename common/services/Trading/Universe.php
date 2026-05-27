@@ -44,9 +44,13 @@ final class Universe
     /**
      * Returns null on pass, otherwise a short rejection reason for logging.
      *
+     * Blacklist + min-candle gates always apply. The turnover floor defaults to
+     * the standard $minTurnover but can be overridden (e.g. the looser S6 floor)
+     * via $minTurnoverOverride.
+     *
      * @param list<array<string, mixed>> $features daily feature rows
      */
-    public function rejectReason(string $symbol, array $features): ?string
+    public function rejectReason(string $symbol, array $features, ?float $minTurnoverOverride = null): ?string
     {
         if ($this->isBlacklisted($symbol)) {
             return 'blacklisted';
@@ -58,7 +62,7 @@ final class Universe
         if ($last === null || $last['turnover20'] === null) {
             return 'no_turnover20';
         }
-        if ($last['turnover20'] < $this->minTurnover) {
+        if ($last['turnover20'] < ($minTurnoverOverride ?? $this->minTurnover)) {
             return 'turnover_below_threshold';
         }
         return null;
