@@ -9,6 +9,8 @@ declare(strict_types=1);
 /** @var bool $telegramConfigured */
 /** @var array<string, mixed> $params */
 /** @var float $unrealisedUsd */
+/** @var array<string, mixed> $uiSettings */
+/** @var array<string, array<string, mixed>> $uiTemplates */
 
 use yii\helpers\Html;
 
@@ -112,6 +114,73 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             <div class="alert alert-<?= $type === 'success' ? 'success' : 'danger' ?> py-2"><?= Html::encode($msg) ?></div>
         <?php endif; ?>
     <?php endforeach; ?>
+
+    <!-- Sizing settings -->
+    <?php
+        $curEquity   = (float)($params['equityUsd']      ?? 10000);
+        $curRiskPct  = (float)($params['riskPct']        ?? 0.005);
+        $curMaxNotPc = (float)($params['maxNotionalPct'] ?? 0.20);
+        $curTpl      = (string)($uiSettings['template']  ?? 'custom');
+        $savedAt     = (string)($uiSettings['updated_at'] ?? '');
+    ?>
+    <div class="card card-section mb-3"><div class="card-body py-3">
+        <?= Html::beginForm(['save-settings'], 'post', ['class' => 'row g-2 align-items-end']) ?>
+            <div class="col-12 col-md-auto">
+                <div class="text-secondary small">Sizing</div>
+                <div class="fw-semibold">Account &amp; risk</div>
+                <?php if ($savedAt !== ''): ?>
+                    <div class="text-secondary small">saved <?= Html::encode($savedAt) ?> UTC</div>
+                <?php endif; ?>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Equity (USD)</label>
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text">$</span>
+                    <?= Html::input('number', 'equityUsd', number_format($curEquity, 2, '.', ''),
+                        ['class' => 'form-control num', 'step' => '1', 'min' => '1']) ?>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Risk / trade</label>
+                <div class="input-group input-group-sm">
+                    <?= Html::input('number', 'riskPct', rtrim(rtrim(sprintf('%.4f', $curRiskPct * 100), '0'), '.'),
+                        ['class' => 'form-control num', 'step' => '0.05', 'min' => '0.01']) ?>
+                    <span class="input-group-text">%</span>
+                </div>
+            </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Max notional / trade</label>
+                <div class="input-group input-group-sm">
+                    <?= Html::input('number', 'maxNotionalPct', rtrim(rtrim(sprintf('%.2f', $curMaxNotPc * 100), '0'), '.'),
+                        ['class' => 'form-control num', 'step' => '1', 'min' => '1']) ?>
+                    <span class="input-group-text">%</span>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Template</label>
+                <?php
+                    $tplOptions = ['custom' => 'Custom (use values above)'];
+                    foreach ($uiTemplates as $key => $t) {
+                        $tplOptions[$key] = sprintf(
+                            '%s — %s%% risk · %s%% max',
+                            $t['label'],
+                            rtrim(rtrim(sprintf('%.3f', (float)$t['riskPct'] * 100), '0'), '.'),
+                            (int)round((float)$t['maxNotionalPct'] * 100),
+                        );
+                    }
+                ?>
+                <?= Html::dropDownList('template', $curTpl, $tplOptions, ['class' => 'form-select form-select-sm']) ?>
+            </div>
+            <div class="col-12 col-md-auto">
+                <?= Html::submitButton('Apply', ['class' => 'btn btn-sm btn-primary']) ?>
+            </div>
+            <div class="col-12">
+                <div class="text-secondary small">
+                    Picking a non-Custom template uses its preset Risk &amp; Max-notional (the matching inputs above are ignored). Equity is always taken as-typed. Applies globally — next scan sizes signals at these settings; existing open positions keep their original sizing.
+                </div>
+            </div>
+        <?= Html::endForm() ?>
+    </div></div>
 
     <!-- KPI cards -->
     <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-2">

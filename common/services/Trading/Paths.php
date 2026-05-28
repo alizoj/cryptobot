@@ -74,6 +74,11 @@ final class Paths
         return self::stateDir() . '/fetch_state.json';
     }
 
+    public static function uiSettings(): string
+    {
+        return self::stateDir() . '/ui_settings.json';
+    }
+
     public static function lockFile(string $name): string
     {
         return self::stateDir() . "/{$name}.lock";

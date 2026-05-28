@@ -5,6 +5,7 @@ declare(strict_types=1);
 return [
     'bootstrap' => [
         \common\bootstrap\MailerBootstrap::class,
+        \common\bootstrap\TradingSettingsBootstrap::class,
     ],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',

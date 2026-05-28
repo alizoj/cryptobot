@@ -8,6 +8,7 @@ use common\services\Trading\MarketData;
 use common\services\Trading\PositionStore;
 use common\services\Trading\SignalEngine;
 use common\services\Trading\TelegramNotifier;
+use common\services\Trading\UiSettings;
 use Yii;
 use yii\filters\AccessControl;
 use yii\filters\VerbFilter;
@@ -37,7 +38,10 @@ final class TradingController extends Controller
             ],
             'verbs' => [
                 'class' => VerbFilter::class,
-                'actions' => ['test-telegram' => ['post']],
+                'actions' => [
+                    'test-telegram' => ['post'],
+                    'save-settings' => ['post'],
+                ],
             ],
         ];
     }
@@ -80,7 +84,17 @@ final class TradingController extends Controller
             'telegramConfigured' => (new TelegramNotifier())->isConfigured(),
             'params'  => Yii::$app->params['trading'] ?? [],
             'unrealisedUsd' => $unrealisedUsd,
+            'uiSettings'    => UiSettings::load(),
+            'uiTemplates'   => UiSettings::TEMPLATES,
         ]);
+    }
+
+    public function actionSaveSettings(): Response
+    {
+        $patch = UiSettings::resolve(Yii::$app->request->post());
+        UiSettings::save($patch);
+        Yii::$app->session->setFlash('success', 'Sizing settings saved.');
+        return $this->redirect(['index']);
     }
 
     public function actionScanPreview(?string $asOf = null): string
