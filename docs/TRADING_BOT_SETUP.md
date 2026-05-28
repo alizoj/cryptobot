@@ -86,9 +86,24 @@ Each step is now a direct in-process service call (no shelling out):
 | dominance | `common\services\Trading\Fetcher\DominanceFetcher` | CMC BTC.D + total/alt mcap |
 | fng | `common\services\Trading\Fetcher\FngFetcher` | alternative.me Fear & Greed |
 
-Each is idempotent and pulls only deltas. The on-disk format is
-byte-compatible with the standalone scripts under `common/data/fetch_*.php`,
-which are kept in place as a manual-CLI fallback.
+### 2.1. Incremental fetch
+
+Subsequent runs only fetch what's missing. For each interval (`D` / `W` / `4h`
+/ `1h` for prices; `funding` / `OI` for derivatives), the fetcher reads the
+last stored bar's timestamp, compares it to "now", and **skips entirely** if
+less than one bar period has elapsed. Otherwise it requests bars from the
+last stored timestamp forward to "now" and merges them in (newer rows
+overwrite the previous still-forming bar at the same timestamp).
+
+Practical consequence: every `run-*` cron job below brings data current. A
+run when nothing has ticked over is a few hundred ms of disk reads, no HTTP.
+A run after a one-day gap pulls ~24 1h bars + ~6 4h bars + 1 daily bar per
+symbol — one Bybit request per interval.
+
+> If you ever need to **force** a full re-pull for a symbol (e.g. suspected
+> corruption), delete its file under `common/data/history_prices/<SYMBOL>.json`
+> and re-run `./yii trading/fetch-data` — the missing file is treated as a
+> from-launch fetch.
 
 ## 3. Manual scan / preview
 
@@ -131,6 +146,13 @@ CRON_TZ=UTC
 - `run-hourly` — refresh prices + derivatives → manage open positions (funding-flip invalidation, stop-hits between daily closes). **Does not scan for new entries.**
 - `run-4h` — refresh prices + derivatives → scan the **4h** setups (L5/S6) at the just-closed 4h bar. Self-contained, so it doesn't depend on `run-hourly` ordering. Dedup is per-4h-bar, so it's also safe to run hourly if you prefer.
 
+> **Don't add a standalone `trading/fetch-data` line — it's redundant.** Every
+> `run-*` wrapper above fetches before doing its work, and fetches are now
+> incremental (see §2.1), so the daily/hourly/4h jobs together keep every data
+> source current at near-zero marginal cost. Only `run-daily` refreshes the
+> macro sources (BTC-dominance + FNG), and that's correct because both update
+> once per day.
+
 > Why `:20` for the 4h job: it must run **after** the 4h bar has been fetched
 > and the universe walk has finished. `run-4h` fetches first, so the `:20` is
 > just margin; signals are swing entries, so ~20 min latency is irrelevant.
@@ -157,7 +179,7 @@ In **Conditions** uncheck "Start only on AC power" if this is a desktop.
 ./yii trading/scan-4h --dryRun=1                # preview the 4h MTF scan (L5/S6) at the latest 4h bar
 ./yii trading/scan-4h --asOf="2026-05-14 16:00" # 4h scan at a specific UTC 4h close
 ./yii trading/manage-positions                  # one-off lifecycle pass
-./yii trading/fetch-data                        # refresh all sources
+./yii trading/fetch-data                        # ad-hoc refresh (incremental); cron already covers this
 ./yii trading/test-telegram                     # verify channel creds
 ./yii trading/test-chart BTC                    # verify the QuickChart -> Telegram image pipeline
 ```

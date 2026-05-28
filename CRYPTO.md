@@ -5,16 +5,16 @@ HashHedge-listed symbols** on Bybit V5 (`common/data/history_prices/`).
 Event window covers **Aug 2021 → May 2026** (~4.75 years), with macro
 series back to 2013 (BTC dominance) and 2018 (Fear & Greed).
 
-**Re-run end-to-end:**
+**Refresh the underlying data:**
 ```
-php common/data/fetch_bybit_data.php
-php common/data/fetch_bybit_derivatives.php
-php common/data/fetch_macro_dominance.php
-php common/data/analyze_combined.php
+./yii trading/fetch-data
 ```
-Findings below come from `_analysis_combined_report.json` plus the
-hour-of-day / day-of-week / compression measurements from
-`_analysis_report.json`.
+Runs the full pipeline in-process (prices → derivatives → dominance → FNG).
+Findings below were originally generated from `_analysis_combined_report.json`
+and `_analysis_report.json`; those reports — and the `analyze_*.php` scripts
+that produced them — have been removed from the repo. Restore from git
+history (`git show <commit>:common/data/analyze_combined.php`) if you need
+to re-run the analysis.
 
 ## 0. Data scope
 
@@ -572,22 +572,12 @@ Ranked by edge vs effort:
 
 ## Re-running the pipeline
 
+The data refresh runs in-process through the Yii service classes:
+
 ```
-# 1. Price data (interval D, W, 4h, 1h) — ~30 min on a clean machine
-php common/data/fetch_bybit_data.php
-
-# 2. Derivatives — ~30 min
-php common/data/fetch_bybit_derivatives.php
-
-# 3. Macro — ~10 seconds (3 paginated CMC calls)
-php common/data/fetch_macro_dominance.php
-
-# 4. Combined analysis — ~2 minutes
-php common/data/analyze_combined.php
-
-# Outputs (this document is generated from these):
-#   common/data/_analysis_combined_report.json   (78 KB, the master report)
-#   common/data/_analysis_report.json            (76 KB, price-only — used for hour-of-day, day-of-week, compression)
-#   common/data/_analysis_derivatives_report.json (14 KB)
-#   common/data/_analysis_dominance_report.json   ( 9 KB)
+./yii trading/fetch-data    # prices + derivatives + dominance + FNG (incremental)
 ```
+
+The analysis layer (`analyze_combined.php` and friends) that produced the
+`_analysis_*.json` reports cited above was removed from the repo during
+cleanup; restore from git history if you need to regenerate the reports.

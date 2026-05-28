@@ -1,2 +1,4 @@
 *
 !.gitignore
+!bybit_symbol_overrides.json
+!hashhedge_symbols.json

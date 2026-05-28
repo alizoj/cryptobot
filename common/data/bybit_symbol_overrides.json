@@ -1,0 +1,8 @@
+{
+  "_comment": "HashHedge ticker -> Bybit spot symbol override. Most HashHedge tickers are {SYMBOL}USDT on Bybit by default; this file only lists cases where that's wrong. The script auto-falls-back to USDT perpetual (category=linear) if no spot pair exists.",
+
+  "XAU": "XAUTUSDT",
+  "LINEA": "LINEAUSDT",
+  "WLFI": "WLFIUSDT",
+  "ASTER": "ASTERUSDT"
+}

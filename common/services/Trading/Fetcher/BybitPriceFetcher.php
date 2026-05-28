@@ -14,9 +14,11 @@ use Yii;
  * HashHedge-listed symbol from the Bybit V5 public API and write them out
  * to common/data/history_prices/<SYMBOL>.json.
  *
- * Extracted line-for-line from common/data/fetch_bybit_data.php so the
- * on-disk format and behaviour are identical — the standalone script is
- * kept in place as a CLI fallback.
+ * Subsequent runs are incremental: per interval, if the last stored bar is
+ * older than one period, we re-fetch from that bar's timestamp forward and
+ * merge by timestamp (the still-forming bar gets overwritten next run). The
+ * writeback preserves any sibling top-level keys (notably the 'derivatives'
+ * block written by {@see BybitDerivativesFetcher}).
  */
 final class BybitPriceFetcher
 {
@@ -38,6 +40,23 @@ final class BybitPriceFetcher
         '5m'  => '5',
         '3m'  => '3',
         '1m'  => '1',
+    ];
+
+    /** Nominal bar length per label, used to detect stale stored data. */
+    public const INTERVAL_PERIOD_MS = [
+        'M'   => 30 * 86_400_000,
+        'W'   => 7  * 86_400_000,
+        'D'   => 86_400_000,
+        '12h' => 12 * 3_600_000,
+        '6h'  => 6  * 3_600_000,
+        '4h'  => 4  * 3_600_000,
+        '2h'  => 2  * 3_600_000,
+        '1h'  => 3_600_000,
+        '30m' => 30 * 60_000,
+        '15m' => 15 * 60_000,
+        '5m'  => 5  * 60_000,
+        '3m'  => 3  * 60_000,
+        '1m'  => 60_000,
     ];
 
     private BybitHttp $http;
@@ -118,10 +137,24 @@ final class BybitPriceFetcher
             }
 
             $existingIntervals = $existing['history']['intervals'] ?? [];
+            $nowMs = (int)(microtime(true) * 1000);
             $needed = [];
+            /** @var array<string,int> $incrementalStart label => startMs (re-fetch from this bar forward) */
+            $incrementalStart = [];
             foreach ($intervals as $label) {
-                if ($refresh || !isset($existingIntervals[$label])) {
+                $rows = $existingIntervals[$label]['rows'] ?? null;
+                if ($refresh || $rows === null || $rows === []) {
+                    $needed[] = $label;  // full fetch from instrument launch
+                    continue;
+                }
+                $lastTs = (int)$rows[count($rows) - 1][0];
+                // Stale if at least one bar's worth of time has elapsed since
+                // lastTs — that means either a new bar has opened or the last
+                // bar is now closed and may have updated final values.
+                $period = self::INTERVAL_PERIOD_MS[$label] ?? 3_600_000;
+                if ($nowMs >= $lastTs + $period) {
                     $needed[] = $label;
+                    $incrementalStart[$label] = $lastTs;
                 }
             }
             if (empty($needed)) {
@@ -135,7 +168,7 @@ final class BybitPriceFetcher
                         file_put_contents($outPath, $newJson);
                         $log("$prefix - migrated structure (no fetch needed)");
                     } else {
-                        $log("$prefix - all intervals present, skipping");
+                        $log("$prefix - all intervals fresh, skipping");
                     }
                 }
                 continue;
@@ -155,18 +188,40 @@ final class BybitPriceFetcher
                 $launchTime = (int)($inst['launchTime'] ?? '0') ?: self::FALLBACK_LAUNCH_MS;
                 $intervalsMap = $existingIntervals;
                 foreach ($needed as $label) {
-                    $entry = $this->buildIntervalEntry($category, $bybitSymbol, $label, $launchTime);
+                    if (isset($incrementalStart[$label])) {
+                        $existingRows = $existingIntervals[$label]['rows'] ?? [];
+                        $fresh = $this->fetchLifetimeKlines(
+                            $category,
+                            $bybitSymbol,
+                            $incrementalStart[$label],
+                            self::INTERVAL_LABELS[$label],
+                        );
+                        $merged = $this->mergeRowsByTs($existingRows, $fresh);
+                        $added  = count($merged) - count($existingRows);
+                        $entry = [
+                            'schema'        => ['startTime_ms', 'open', 'high', 'low', 'close', 'volume', 'turnover'],
+                            'rows'          => $merged,
+                            'row_count'     => count($merged),
+                            'first_row_utc' => $merged ? JsonFormatter::isoUtcFromMs((int)$merged[0][0]) : null,
+                            'last_row_utc'  => $merged ? JsonFormatter::isoUtcFromMs((int)$merged[count($merged) - 1][0]) : null,
+                        ];
+                        $log("           $label: {$entry['row_count']} candles (+$added new)");
+                    } else {
+                        $entry = $this->buildIntervalEntry($category, $bybitSymbol, $label, $launchTime);
+                        $log("           $label: {$entry['row_count']} candles (full)");
+                    }
                     $intervalsMap[$label] = $entry;
-                    $log("           $label: {$entry['row_count']} candles");
                 }
-                $record = [
-                    'hashhedge_symbol' => $sym,
-                    'bybit_symbol'     => $bybitSymbol,
-                    'bybit_category'   => $category,
-                    'fetched_at_utc'   => JsonFormatter::isoUtcNow(),
-                    'instrument'       => $inst,
-                    'history'          => ['intervals' => $this->sortIntervalsCanonical($intervalsMap)],
-                ];
+                // Preserve any top-level keys we don't own (notably the
+                // 'derivatives' block populated by BybitDerivativesFetcher) —
+                // otherwise a price refresh wipes the derivatives data on every write.
+                $record = $existing ?? [];
+                $record['hashhedge_symbol'] = $sym;
+                $record['bybit_symbol']     = $bybitSymbol;
+                $record['bybit_category']   = $category;
+                $record['fetched_at_utc']   = JsonFormatter::isoUtcNow();
+                $record['instrument']       = $inst;
+                $record['history']          = ['intervals' => $this->sortIntervalsCanonical($intervalsMap)];
                 file_put_contents($outPath, JsonFormatter::encode2Space($record));
                 $kb = intdiv((int)filesize($outPath), 1024);
                 $log("           OK ($kb KB total)");
@@ -270,6 +325,29 @@ final class BybitPriceFetcher
         }
         usort($dedup, static fn($a, $b) => (int)$a[0] <=> (int)$b[0]);
         return $dedup;
+    }
+
+    /**
+     * Merge two kline-row lists keyed by open-time (col 0). Fresh rows
+     * overwrite older ones at the same timestamp, so a still-forming bar
+     * refreshed on the next run lands with its latest OHLC. Result is
+     * ascending by ts.
+     *
+     * @param list<list<mixed>> $existing
+     * @param list<list<mixed>> $fresh
+     * @return list<list<mixed>>
+     */
+    private function mergeRowsByTs(array $existing, array $fresh): array
+    {
+        $byTs = [];
+        foreach ($existing as $r) {
+            $byTs[(int)$r[0]] = $r;
+        }
+        foreach ($fresh as $r) {
+            $byTs[(int)$r[0]] = $r;
+        }
+        ksort($byTs);
+        return array_values($byTs);
     }
 
     private function buildIntervalEntry(string $category, string $bybitSymbol, string $label, int $launchMs): array

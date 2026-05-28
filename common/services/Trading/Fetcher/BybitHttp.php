@@ -9,9 +9,6 @@ use RuntimeException;
 /**
  * Shared Bybit V5 public-API client used by the price + derivatives fetchers.
  *
- * Extracted from common/data/fetch_bybit_data.php and .derivatives_helpers.php
- * so the behaviour (retry/backoff, throttling) stays a single source of truth.
- *
  *   - Retries up to MAX_RETRIES on transport errors and HTTP 429/403.
  *   - Throws on every other non-200, and on retCode != 0 in the JSON body.
  *   - Returns the `result` map on success.

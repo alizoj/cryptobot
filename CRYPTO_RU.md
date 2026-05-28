@@ -5,15 +5,16 @@
 событий — **август 2021 → май 2026** (~4.75 года), макро-серии: BTC.D
 с 2013, Fear & Greed с 2018.
 
-**Полный перезапуск пайплайна:**
+**Обновление исходных данных:**
 ```
-php common/data/fetch_bybit_data.php
-php common/data/fetch_bybit_derivatives.php
-php common/data/fetch_macro_dominance.php
-php common/data/analyze_combined.php
+./yii trading/fetch-data
 ```
-Выводы ниже взяты из `_analysis_combined_report.json` плюс измерения
-по часам/дням недели/сжатию из `_analysis_report.json`.
+Запускает весь пайплайн внутри процесса (цены → деривативы → доминация → FNG).
+Выводы ниже были изначально построены из `_analysis_combined_report.json`
+и `_analysis_report.json`; эти отчёты и скрипты `analyze_*.php`, которые их
+формировали, удалены из репозитория. Восстановить можно из git-истории
+(`git show <commit>:common/data/analyze_combined.php`) если нужно
+пересобрать отчёты.
 
 ## 0. Объём данных
 
@@ -599,22 +600,12 @@ FNG сидел на Greed. Сам день просто исполнил.
 
 ## Перезапуск пайплайна
 
+Обновление данных делается inproc через Yii service classes:
+
 ```
-# 1. Цены (D, W, 4h, 1h) — ~30 мин на чистой машине
-php common/data/fetch_bybit_data.php
-
-# 2. Деривативы — ~30 мин
-php common/data/fetch_bybit_derivatives.php
-
-# 3. Макро — ~10 секунд (3 paginated вызова CMC)
-php common/data/fetch_macro_dominance.php
-
-# 4. Объединённый анализ — ~2 минуты
-php common/data/analyze_combined.php
-
-# Выходные файлы (этот документ сгенерирован из них):
-#   common/data/_analysis_combined_report.json   (78 КБ, мастер-отчёт)
-#   common/data/_analysis_report.json            (76 КБ, только цены — для часов, дней недели, сжатия)
-#   common/data/_analysis_derivatives_report.json (14 КБ)
-#   common/data/_analysis_dominance_report.json   ( 9 КБ)
+./yii trading/fetch-data    # цены + деривативы + доминация + FNG (инкрементально)
 ```
+
+Скрипты анализа (`analyze_combined.php` и др.), которые формировали отчёты
+`_analysis_*.json`, удалены из репозитория во время cleanup'а;
+восстановить — из git-истории, если нужно перегенерировать отчёты.

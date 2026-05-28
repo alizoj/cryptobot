@@ -12,8 +12,9 @@ For SUCCESS trades we also recorded the **maximum favourable
 excursion (MFE)** — how far in the trade's favour the price went
 before either the stop hit or T+5 expired.
 
-Re-run: `php common/data/simulate_trades.php`
-Raw report: `common/data/_simulation_report.json` (17 KB).
+> **Historical document.** The simulator (`simulate_trades.php`) and its
+> raw report (`_simulation_report.json`) were removed from the repo during
+> cleanup. Restore from git history if you need to reproduce the run.
 
 ## 1. Coverage
 
@@ -371,20 +372,18 @@ Cheap follow-ups that would meaningfully change the playbook:
 
 ## 10. How to reproduce
 
+The simulator script (`common/data/simulate_trades.php`) was removed during
+repo cleanup. To re-run, restore it from git history:
+
 ```
-# Prereqs (already done in this dataset):
-#   - common/data/history_prices/<SYM>.json  has history.intervals.D + 1h
-#   - common/data/history_prices/<SYM>.json  has derivatives.funding + open_interest
-#   - common/data/history/macro/fng.jsonl
-#   - common/data/history/macro/dominance.jsonl
-
-# Run:
-php common/data/simulate_trades.php
-
-# Output:
-#   common/data/_simulation_report.json  (17 KB)
-#   stdout: per-25-symbol progress + final summary
+git show <commit>:common/data/simulate_trades.php > /tmp/simulate_trades.php
+php /tmp/simulate_trades.php
 ```
 
-The simulator is deterministic — same data, same parameters, same
-results.
+Prereqs (already satisfied by the standard data refresh):
+- `common/data/history_prices/<SYM>.json` has `history.intervals.D + 1h`
+- `common/data/history_prices/<SYM>.json` has `derivatives.funding + open_interest`
+- `common/data/history/macro/fng.jsonl`
+- `common/data/history/macro/dominance.jsonl`
+
+The simulator is deterministic — same data, same parameters, same results.

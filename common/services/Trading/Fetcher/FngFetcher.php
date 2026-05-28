@@ -11,8 +11,6 @@ use RuntimeException;
  * Pull Crypto Fear & Greed Index history from alternative.me and append
  * to common/data/history/macro/fng.jsonl. Idempotent — only appends days
  * not already in the file.
- *
- * Extracted from common/data/fetch_fng.php.
  */
 final class FngFetcher
 {

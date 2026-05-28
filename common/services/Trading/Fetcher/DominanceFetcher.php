@@ -11,9 +11,8 @@ use RuntimeException;
  * Pull BTC dominance + total mcap + altcoin mcap from CoinMarketCap's
  * unofficial data-api and write to common/data/history/macro/dominance.jsonl.
  *
- * Extracted from common/data/fetch_macro_dominance.php. Endpoint is
- * unofficial; the script accepts a flag to re-fetch the full history if
- * the API path changes.
+ * Endpoint is unofficial; the service accepts a `refresh` flag to re-fetch
+ * the full history if the API path changes.
  */
 final class DominanceFetcher
 {

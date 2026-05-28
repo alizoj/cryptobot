@@ -1,0 +1,21 @@
+{
+  "_comment": "Master list of HashHedge-listed tickers (from https://hashhedge.gitbook.io/hashhedge-user-guide/coins-limit). The Bybit fetcher reads this list and resolves each ticker to a Bybit instrument using bybit_symbol_overrides.json and instrument auto-discovery. Tickers with no Bybit spot pair or no linear perp are pruned from this list.",
+  "symbols": [
+    "BTC", "ETH", "XRP", "SOL", "DOGE", "XAU",
+    "BNB", "LTC", "TRX", "ADA", "XLM", "LINK",
+    "SUI", "DOT", "UNI", "TAO", "ARB", "WIF", "LDO", "HYPE", "ASTER", "XMR", "ZEC",
+    "BCH", "AVAX", "TON", "JUP", "LIT",
+    "HBAR", "APT", "ICP", "ONDO", "ENA", "VET", "SEI", "WLD", "ATOM", "FIL",
+    "TIA", "INJ", "OP", "STX", "IMX", "GRT", "ENS", "CAKE", "SAND",
+    "JASMY", "PYTH", "PENDLE", "JTO", "MANA", "RUNE", "RSR", "CFX", "CHZ",
+    "APE", "DASH", "BLUR", "COMP", "CYBER", "BIGTIME", "TRB", "ORDI", "MASK",
+    "ACE", "ARKM", "CKB", "ENJ", "ID", "ALT", "LPT",
+    "GMT", "MANTA", "ROSE", "XAI", "BOME", "AEVO", "STORJ", "UMA",
+    "USTC", "ZETA", "PEOPLE", "METIS", "API3", "POLYX", "ZRX", "DUSK",
+    "SSV", "YGG", "EDU", "PORTAL", "AR", "DYM", "ANKR",
+    "XVG", "EGLD", "AUCTION", "LQTY", "SAGA", "GAS", "BEL", "BICO", "NEO",
+    "ONG", "WOO", "STG", "HIGH", "ACH", "MAV", "1INCH", "LSK",
+    "ILV", "GMX", "IOST", "ETHFI", "W", "CATI", "HMSTR",
+    "BSV", "WLFI", "LINEA", "TNSR"
+  ]
+}

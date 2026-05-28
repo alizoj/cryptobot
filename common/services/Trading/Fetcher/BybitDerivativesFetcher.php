@@ -13,7 +13,9 @@ use Yii;
  * has a linear-perp pair on Bybit, and merge under the `derivatives` block
  * of common/data/history_prices/<SYMBOL>.json.
  *
- * Extracted from common/data/fetch_bybit_derivatives.php + .derivatives_helpers.php.
+ * Funding events fire every 8h, OI snapshots are daily. Per block, if the
+ * last stored row is older than one period, we extend forward from that row
+ * and merge by timestamp; otherwise the block is skipped with no API call.
  */
 final class BybitDerivativesFetcher
 {
@@ -21,6 +23,8 @@ final class BybitDerivativesFetcher
     public const OI_LIMIT = 200;
     public const OI_INTERVAL = '1d';
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000;
+    public const FUNDING_PERIOD_MS  = 8 * 3_600_000;  // funding events fire 3x/day
+    public const OI_PERIOD_MS       = 86_400_000;     // OI snapshots are daily
 
     private BybitHttp $http;
     private InstrumentsIndex $instruments;
@@ -91,14 +95,24 @@ final class BybitDerivativesFetcher
         $success = 0;
         $fetched = 0;
         $skipped = 0;
+        $nowMs   = (int)(microtime(true) * 1000);
 
         foreach ($files as $i => $file) {
             $sym = pathinfo($file, PATHINFO_FILENAME);
             $prefix = sprintf('[%3d/%d] %-8s', $i + 1, count($files), $sym);
 
             $record = json_decode((string)file_get_contents($file), true, flags: JSON_THROW_ON_ERROR);
-            if (!$refresh && isset($record['derivatives']['funding']['rows'], $record['derivatives']['open_interest']['rows'])) {
-                $log("$prefix - derivatives present, skipping");
+
+            $existingFunding = $record['derivatives']['funding']['rows']       ?? [];
+            $existingOi      = $record['derivatives']['open_interest']['rows'] ?? [];
+            $fundingLastTs   = $existingFunding ? (int)$existingFunding[array_key_last($existingFunding)][0] : 0;
+            $oiLastTs        = $existingOi      ? (int)$existingOi[array_key_last($existingOi)][0]           : 0;
+
+            $needFunding = $refresh || !$existingFunding || ($nowMs >= $fundingLastTs + self::FUNDING_PERIOD_MS);
+            $needOi      = $refresh || !$existingOi      || ($nowMs >= $oiLastTs      + self::OI_PERIOD_MS);
+
+            if (!$needFunding && !$needOi) {
+                $log("$prefix - derivatives fresh, skipping");
                 $success++;
                 $skipped++;
                 continue;
@@ -119,23 +133,37 @@ final class BybitDerivativesFetcher
             }
 
             $log("$prefix -> $linearSymbol (linear)");
-            $derivatives = [
-                'bybit_symbol'   => $linearSymbol,
-                'fetched_at_utc' => JsonFormatter::isoUtcNow(),
-            ];
+            $derivatives = $record['derivatives'] ?? ['bybit_symbol' => $linearSymbol];
+            $derivatives['bybit_symbol']   = $linearSymbol;
+            $derivatives['fetched_at_utc'] = JsonFormatter::isoUtcNow();
 
             try {
-                $funding = $this->fetchFundingHistory($linearSymbol, $launchMs);
-                $derivatives['funding'] = $this->makeBlock(['timestamp_ms', 'funding_rate'], $funding);
-                $log("           funding: " . count($funding) . ' events');
-
-                $oi = $this->fetchOpenInterestHistory($linearSymbol, $launchMs);
-                $derivatives['open_interest'] = $this->makeBlock(
-                    ['timestamp_ms', 'open_interest'],
-                    $oi,
-                    ['interval' => self::OI_INTERVAL],
-                );
-                $log("           OI:      " . count($oi) . ' bars');
+                if ($needFunding) {
+                    $lowerBound = ($existingFunding && !$refresh) ? $fundingLastTs : $launchMs;
+                    $fresh      = $this->fetchFundingHistory($linearSymbol, $lowerBound);
+                    $merged     = ($existingFunding && !$refresh)
+                        ? $this->mergeDerivsRows($existingFunding, $fresh)
+                        : $fresh;
+                    $added = count($merged) - count($existingFunding);
+                    $derivatives['funding'] = $this->makeBlock(['timestamp_ms', 'funding_rate'], $merged);
+                    $tag = ($existingFunding && !$refresh) ? "(+$added new)" : '(full)';
+                    $log("           funding: " . count($merged) . " events $tag");
+                }
+                if ($needOi) {
+                    $lowerBound = ($existingOi && !$refresh) ? $oiLastTs : $launchMs;
+                    $fresh      = $this->fetchOpenInterestHistory($linearSymbol, $lowerBound);
+                    $merged     = ($existingOi && !$refresh)
+                        ? $this->mergeDerivsRows($existingOi, $fresh)
+                        : $fresh;
+                    $added = count($merged) - count($existingOi);
+                    $derivatives['open_interest'] = $this->makeBlock(
+                        ['timestamp_ms', 'open_interest'],
+                        $merged,
+                        ['interval' => self::OI_INTERVAL],
+                    );
+                    $tag = ($existingOi && !$refresh) ? "(+$added new)" : '(full)';
+                    $log("           OI:      " . count($merged) . " bars $tag");
+                }
 
                 $record['derivatives'] = $derivatives;
                 file_put_contents($file, JsonFormatter::encode2Space($record));
@@ -237,6 +265,28 @@ final class BybitDerivativesFetcher
             $this->http->throttle();
         }
         return $this->dedupAndSort($all);
+    }
+
+    /**
+     * Merge two derivatives row lists keyed by ms-timestamp (col 0). Newer
+     * entries overwrite older ones at the same timestamp, then we sort
+     * ascending. Timestamps stay in their original string form.
+     *
+     * @param list<list<string>> $existing
+     * @param list<list<string>> $fresh
+     * @return list<list<string>>
+     */
+    private function mergeDerivsRows(array $existing, array $fresh): array
+    {
+        $byTs = [];
+        foreach ($existing as $r) {
+            $byTs[(int)$r[0]] = $r;
+        }
+        foreach ($fresh as $r) {
+            $byTs[(int)$r[0]] = $r;
+        }
+        ksort($byTs, SORT_NUMERIC);
+        return array_values($byTs);
     }
 
     private function dedupAndSort(array $rows): array
