@@ -122,21 +122,14 @@ final class TradingController extends Controller
         $summary = TelegramNotifier::formatScanSummary($asOf, count($result['signals']), $diag);
         $this->maybeSend($notifier, $summary, 'scan_summary');
 
-        $sent = 0;
-        $deduped = 0;
+        $maxConcurrent = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        $opened = $deduped = $capped = 0;
         foreach ($result['signals'] as $sig) {
             $id = PositionStore::signalId($sig['as_of'], $sig['symbol'], $sig['setup']);
-
-            // Dedup: don't re-emit the same as_of+symbol+setup
-            if ($store->hasOpenForSymbolSetup($sig['symbol'], $sig['setup'], $sig['as_of'])) {
-                $deduped++;
-                continue;
-            }
 
             $msg = TelegramNotifier::formatEntrySignal($sig);
             $sendResult = $this->maybeSend($notifier, $msg, $id);
 
-            // Attach a candlestick chart (entry/stop drawn in) when enabled.
             if ($chart->isEnabled() && ($sendResult['ok'] ?? false)) {
                 $url = $chart->urlForSignal($sig, $md->dailyCandles($sig['symbol']));
                 if ($url !== null) {
@@ -158,35 +151,20 @@ final class TradingController extends Controller
                 'signal'  => $sig,
             ]);
 
-            if (!$this->dryRun && ($sendResult['ok'] ?? false)) {
-                $store->appendOpen([
-                    'id'           => $id,
-                    'as_of'        => $sig['as_of'],
-                    'symbol'       => $sig['symbol'],
-                    'setup'        => $sig['setup'],
-                    'side'         => $sig['side'],
-                    'method'       => $sig['method'],
-                    'entry_px'     => $sig['entry_px'] ?? $sig['entry_estimate'],
-                    'entry_day'    => $sig['as_of'],
-                    'stop_px'      => $sig['stop_px'],
-                    'time_exit_days' => $sig['time_exit_days'],
-                    'beta'         => $sig['beta'],
-                    'size'         => $sig['size'],
-                    'reasons'      => $sig['reasons'],
-                    'context'      => $sig['context'],
-                    'opened_ts'    => time(),
-                    'stop_history' => [],
-                ]);
-                $sent++;
-            }
-            $this->stdout(sprintf("  %s %-8s %-3s %-4s entry=%s stop=%s sent=%s\n",
+            $outcome = $this->dryRun ? 'dry_run' : $store->openFromSignal($sig, $maxConcurrent);
+            if ($outcome === 'opened')      $opened++;
+            if ($outcome === 'dedup')       $deduped++;
+            if ($outcome === 'cap_reached') $capped++;
+
+            $this->stdout(sprintf("  %s %-8s %-3s %-4s entry=%s stop=%s sent=%s open=%s\n",
                 $sig['setup'], $sig['symbol'], strtoupper($sig['side']), $sig['method'],
                 $sig['entry_px'] !== null ? rtrim(rtrim(sprintf('%.6f', $sig['entry_px']), '0'), '.') : 'mkt',
                 rtrim(rtrim(sprintf('%.6f', $sig['stop_px']), '0'), '.'),
-                ($sendResult['ok'] ?? false) ? 'yes' : 'no'
+                ($sendResult['ok'] ?? false) ? 'yes' : 'no',
+                $outcome,
             ));
         }
-        $this->stdout("  sent=$sent dedup=$deduped\n");
+        $this->stdout("  opened=$opened dedup=$deduped capped=$capped cap=$maxConcurrent\n");
         return ExitCode::OK;
     }
 
@@ -217,16 +195,10 @@ final class TradingController extends Controller
         $chart    = new ChartRenderer();
         $md       = new MarketData();
 
-        $sent = 0;
-        $deduped = 0;
+        $maxConcurrent = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        $opened = $deduped = $capped = 0;
         foreach ($result['signals'] as $sig) {
             $id = PositionStore::signalId($sig['as_of'], $sig['symbol'], $sig['setup']);
-
-            // Dedup per 4h bar (as_of is the 4h-bar datetime).
-            if ($store->hasOpenForSymbolSetup($sig['symbol'], $sig['setup'], $sig['as_of'])) {
-                $deduped++;
-                continue;
-            }
 
             $msg = TelegramNotifier::formatEntrySignal($sig);
             $sendResult = $this->maybeSend($notifier, $msg, $id);
@@ -246,33 +218,19 @@ final class TradingController extends Controller
                 'signal'  => $sig,
             ]);
 
-            if (!$this->dryRun && ($sendResult['ok'] ?? false)) {
-                $store->appendOpen([
-                    'id'             => $id,
-                    'as_of'          => $sig['as_of'],
-                    'symbol'         => $sig['symbol'],
-                    'setup'          => $sig['setup'],
-                    'side'           => $sig['side'],
-                    'method'         => $sig['method'],
-                    'entry_px'       => $sig['entry_px'] ?? $sig['entry_estimate'],
-                    'entry_day'      => $sig['as_of_day'],
-                    'stop_px'        => $sig['stop_px'],
-                    'time_exit_days' => $sig['time_exit_days'],
-                    'beta'           => $sig['beta'],
-                    'size'           => $sig['size'],
-                    'reasons'        => $sig['reasons'],
-                    'context'        => $sig['context'],
-                    'opened_ts'      => time(),
-                    'stop_history'   => [],
-                ]);
-                $sent++;
-            }
-            $this->stdout(sprintf("  %s %-8s %-5s stop=%s sent=%s\n",
+            $outcome = $this->dryRun ? 'dry_run' : $store->openFromSignal($sig, $maxConcurrent);
+            if ($outcome === 'opened')      $opened++;
+            if ($outcome === 'dedup')       $deduped++;
+            if ($outcome === 'cap_reached') $capped++;
+
+            $this->stdout(sprintf("  %s %-8s %-5s stop=%s sent=%s open=%s\n",
                 $sig['setup'], $sig['symbol'], strtoupper($sig['side']),
                 rtrim(rtrim(sprintf('%.6f', $sig['stop_px']), '0'), '.'),
-                ($sendResult['ok'] ?? false) ? 'yes' : 'no'));
+                ($sendResult['ok'] ?? false) ? 'yes' : 'no',
+                $outcome,
+            ));
         }
-        $this->stdout("  sent=$sent dedup=$deduped\n");
+        $this->stdout("  opened=$opened dedup=$deduped capped=$capped cap=$maxConcurrent\n");
         return ExitCode::OK;
     }
 

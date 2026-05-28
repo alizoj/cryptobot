@@ -60,7 +60,11 @@ return [
         'memecoinPriceOnly'     => ['PEPE', 'BONK', 'SHIB', 'FLOKI', 'RATS'],
 
         // ---- DORMANT setups (won't fire even if data matches) ----
-        'dormantSetups'         => ['S1', 'S2'],
+        // S1 + S2 re-enabled to broaden short coverage (TRADE/SIMULATION_RESULT_*
+        // had them dormant after the Experiment 11 OOS underperformance —
+        // re-enabling is a deliberate reversal so the bot finds funding-extreme
+        // and basket-overbought shorts again).
+        'dormantSetups'         => [],
 
         // ---- paths ----
         'dataDir'               => '@common/data',

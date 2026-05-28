@@ -117,11 +117,12 @@ $navBtn = static function (string $label, array $route, bool $active): string {
 
     <!-- Sizing settings -->
     <?php
-        $curEquity   = (float)($params['equityUsd']      ?? 10000);
-        $curRiskPct  = (float)($params['riskPct']        ?? 0.005);
-        $curMaxNotPc = (float)($params['maxNotionalPct'] ?? 0.20);
-        $curTpl      = (string)($uiSettings['template']  ?? 'custom');
-        $savedAt     = (string)($uiSettings['updated_at'] ?? '');
+        $curEquity   = (float)($params['equityUsd']            ?? 10000);
+        $curRiskPct  = (float)($params['riskPct']              ?? 0.005);
+        $curMaxNotPc = (float)($params['maxNotionalPct']       ?? 0.20);
+        $curMaxConc  = (int)  ($params['maxConcurrentSingles'] ?? 5);
+        $curTpl      = (string)($uiSettings['template']        ?? 'custom');
+        $savedAt     = (string)($uiSettings['updated_at']      ?? '');
     ?>
     <div class="card card-section mb-3"><div class="card-body py-3">
         <?= Html::beginForm(['save-settings'], 'post', ['class' => 'row g-2 align-items-end']) ?>
@@ -156,6 +157,11 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                     <span class="input-group-text">%</span>
                 </div>
             </div>
+            <div class="col-6 col-md-2">
+                <label class="form-label small mb-1" title="Auto-open cap: scans stop opening when this many positions are already open. Close one to free a slot.">Max positions</label>
+                <?= Html::input('number', 'maxConcurrentSingles', (string)$curMaxConc,
+                    ['class' => 'form-control form-control-sm num', 'step' => '1', 'min' => '1', 'max' => '50']) ?>
+            </div>
             <div class="col-6 col-md-3">
                 <label class="form-label small mb-1">Template</label>
                 <?php
@@ -176,7 +182,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             </div>
             <div class="col-12">
                 <div class="text-secondary small">
-                    Picking a non-Custom template uses its preset Risk &amp; Max-notional (the matching inputs above are ignored). Equity is always taken as-typed. Applies globally — next scan sizes signals at these settings; existing open positions keep their original sizing.
+                    Picking a non-Custom template uses its preset Risk &amp; Max-notional (the matching inputs above are ignored). Equity and Max positions are always taken as-typed. Applies globally — next scan sizes signals at these settings; existing open positions keep their original sizing.
                 </div>
             </div>
         <?= Html::endForm() ?>
@@ -273,7 +279,20 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                         <td class="text-end num">$<?= number_format((float)($p['size']['risk_usd'] ?? 0), 0) ?></td>
                         <td class="text-end"><?= $pnlCell($p['pnl_pct'] ?? null) ?></td>
                         <td class="text-end"><?= $pnlUsdCell($p['pnl_usd'] ?? null) ?></td>
-                        <td class="text-end"><?= $chartLink($p['symbol'] ?? null, $p['entry_px'] ?? null, $p['stop_px'] ?? null, $side, $p['setup'] ?? null, $p['entry_day'] ?? null) ?></td>
+                        <td class="text-end">
+                            <?= $chartLink($p['symbol'] ?? null, $p['entry_px'] ?? null, $p['stop_px'] ?? null, $side, $p['setup'] ?? null, $p['entry_day'] ?? null) ?>
+                            <?= Html::beginForm(['close-position'], 'post', ['style' => 'display:inline; margin-left:6px']) ?>
+                                <?= Html::hiddenInput('id', (string)($p['id'] ?? '')) ?>
+                                <?= Html::submitButton('Close', [
+                                    'class' => 'btn btn-sm btn-outline-danger py-0',
+                                    'data-confirm' => sprintf(
+                                        'Close %s %s at the latest close? Re-scan will look for new entries to fill the slot.',
+                                        $p['symbol'] ?? '?',
+                                        $p['setup'] ?? '?',
+                                    ),
+                                ]) ?>
+                            <?= Html::endForm() ?>
+                        </td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>

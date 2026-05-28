@@ -11,7 +11,7 @@ namespace common\services\Trading;
  * `Yii::$app->params['trading']` by {@see \common\bootstrap\TradingSettingsBootstrap}
  * so every sizing/display call site picks them up uniformly.
  *
- * Only three knobs are exposed: equity, per-trade risk %, max-notional %.
+ * Exposed knobs: equity, per-trade risk %, max-notional %, max open positions.
  * Strategy parameters stay in `common/config/params.php`.
  */
 final class UiSettings
@@ -37,10 +37,14 @@ final class UiSettings
 
     /** Hard bounds for sanity (UI validates against these). */
     public const BOUNDS = [
-        'equityUsd'      => ['min' => 1.0,    'max' => 1.0e9],
-        'riskPct'        => ['min' => 0.0001, 'max' => 0.05],
-        'maxNotionalPct' => ['min' => 0.01,   'max' => 1.0],
+        'equityUsd'            => ['min' => 1.0,    'max' => 1.0e9],
+        'riskPct'              => ['min' => 0.0001, 'max' => 0.05],
+        'maxNotionalPct'       => ['min' => 0.01,   'max' => 1.0],
+        'maxConcurrentSingles' => ['min' => 1,      'max' => 50],
     ];
+
+    /** Keys that should be persisted/applied as integers (not floats). */
+    private const INT_KEYS = ['maxConcurrentSingles'];
 
     /** @return array<string,mixed> {equityUsd?,riskPct?,maxNotionalPct?,template?,updated_at?} */
     public static function load(): array
@@ -73,12 +77,13 @@ final class UiSettings
     }
 
     /**
-     * Resolve {equityUsd, riskPct, maxNotionalPct} from the submitted form.
+     * Resolve settings from the submitted form.
      *
-     *   - equityUsd is always taken from the input (presets don't dictate equity).
+     *   - equityUsd and maxConcurrentSingles are always taken from the inputs
+     *     (presets don't dictate account size or position-count discipline).
      *   - When a named template is chosen, riskPct and maxNotionalPct come from
      *     the preset (the corresponding form fields are ignored).
-     *   - When template = "custom", all three come from the inputs.
+     *   - When template = "custom", riskPct and maxNotionalPct come from inputs.
      *
      * @param array<string,mixed> $input
      * @return array<string,mixed>
@@ -92,6 +97,9 @@ final class UiSettings
 
         if (array_key_exists('equityUsd', $input) && $input['equityUsd'] !== '' && $input['equityUsd'] !== null) {
             $out['equityUsd'] = (float)$input['equityUsd'];
+        }
+        if (array_key_exists('maxConcurrentSingles', $input) && $input['maxConcurrentSingles'] !== '' && $input['maxConcurrentSingles'] !== null) {
+            $out['maxConcurrentSingles'] = (int)$input['maxConcurrentSingles'];
         }
 
         if ($named) {
@@ -127,7 +135,8 @@ final class UiSettings
             if (!is_finite($v)) {
                 continue;
             }
-            $out[$key] = max($b['min'], min($b['max'], $v));
+            $clamped = max($b['min'], min($b['max'], $v));
+            $out[$key] = in_array($key, self::INT_KEYS, true) ? (int)$clamped : $clamped;
         }
         return $out;
     }

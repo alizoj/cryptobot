@@ -39,8 +39,9 @@ final class TradingController extends Controller
             'verbs' => [
                 'class' => VerbFilter::class,
                 'actions' => [
-                    'test-telegram' => ['post'],
-                    'save-settings' => ['post'],
+                    'test-telegram'  => ['post'],
+                    'save-settings'  => ['post'],
+                    'close-position' => ['post'],
                 ],
             ],
         ];
@@ -94,6 +95,69 @@ final class TradingController extends Controller
         $patch = UiSettings::resolve(Yii::$app->request->post());
         UiSettings::save($patch);
         Yii::$app->session->setFlash('success', 'Sizing settings saved.');
+        return $this->redirect(['index']);
+    }
+
+    /**
+     * Close one open position by id, marking it 'manual_close' with P&L
+     * vs the latest daily close, then run daily + 4h scans so newly-fired
+     * signals can fill the freed slot up to `maxConcurrentSingles`.
+     */
+    public function actionClosePosition(): Response
+    {
+        $id   = (string)Yii::$app->request->post('id', '');
+        $store = new PositionStore();
+        $open  = $store->openPositions();
+
+        $closing   = null;
+        $remaining = [];
+        foreach ($open as $p) {
+            if (($p['id'] ?? '') === $id && $closing === null) {
+                $closing = $p;
+            } else {
+                $remaining[] = $p;
+            }
+        }
+        if ($closing === null) {
+            Yii::$app->session->setFlash('error', "Position not found: $id");
+            return $this->redirect(['index']);
+        }
+
+        $candles = (new MarketData())->dailyCandles((string)$closing['symbol']);
+        $last    = $candles !== [] ? end($candles) : null;
+        $entry   = (float)$closing['entry_px'];
+        $exitPx  = $last !== null ? (float)$last['c'] : $entry;
+        $pnlPct  = $entry > 0
+            ? (($closing['side'] ?? '') === 'long' ? $exitPx / $entry - 1 : $entry / $exitPx - 1)
+            : 0.0;
+
+        $closing['outcome'] = [
+            'exit_ts'     => time(),
+            'exit_day'    => gmdate('Y-m-d'),
+            'exit_px'     => $exitPx,
+            'exit_reason' => 'manual_close',
+            'pnl_pct'     => $pnlPct,
+        ];
+        $store->appendClosed($closing);
+        $store->replaceOpen($remaining);
+
+        // Re-scan so a freed slot can be filled immediately.
+        $cap    = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        $engine = new SignalEngine();
+        $opened = 0;
+        foreach ($engine->scan(null)['signals'] as $sig) {
+            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
+        }
+        foreach ($engine->scanIntraday(null)['signals'] as $sig) {
+            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
+        }
+
+        Yii::$app->session->setFlash('success', sprintf(
+            'Closed %s %s at %s (%+.2f%%). %d new position(s) opened from re-scan.',
+            $closing['symbol'], $closing['setup'],
+            rtrim(rtrim(sprintf('%.6f', $exitPx), '0'), '.'),
+            $pnlPct * 100, $opened,
+        ));
         return $this->redirect(['index']);
     }
 

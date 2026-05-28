@@ -30,6 +30,9 @@ final class TradingSettingsBootstrap implements BootstrapInterface
                 $trading[$k] = (float)$saved[$k];
             }
         }
+        if (array_key_exists('maxConcurrentSingles', $saved)) {
+            $trading['maxConcurrentSingles'] = (int)$saved['maxConcurrentSingles'];
+        }
         if (isset($saved['template'])) {
             $trading['template'] = (string)$saved['template'];
         }

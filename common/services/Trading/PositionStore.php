@@ -72,6 +72,45 @@ final class PositionStore
         return false;
     }
 
+    /**
+     * Append an open position derived from a signal payload. Returns one of:
+     *   - 'opened'       — appended
+     *   - 'dedup'        — same (symbol, setup, as_of) already open
+     *   - 'cap_reached'  — would exceed $maxConcurrent
+     *
+     * @param array<string,mixed> $sig signal payload from SignalEngine::scan*()
+     */
+    public function openFromSignal(array $sig, int $maxConcurrent): string
+    {
+        $open = $this->openPositions();
+        if (count($open) >= $maxConcurrent) {
+            return 'cap_reached';
+        }
+        $asOf = (string)$sig['as_of'];
+        if ($this->hasOpenForSymbolSetup($sig['symbol'], $sig['setup'], $asOf)) {
+            return 'dedup';
+        }
+        $this->appendOpen([
+            'id'             => self::signalId($asOf, $sig['symbol'], $sig['setup']),
+            'as_of'          => $asOf,
+            'symbol'         => $sig['symbol'],
+            'setup'          => $sig['setup'],
+            'side'           => $sig['side'],
+            'method'         => $sig['method'],
+            'entry_px'       => $sig['entry_px'] ?? $sig['entry_estimate'],
+            'entry_day'      => $sig['as_of_day'] ?? $asOf,
+            'stop_px'        => $sig['stop_px'],
+            'time_exit_days' => $sig['time_exit_days'],
+            'beta'           => $sig['beta'],
+            'size'           => $sig['size'],
+            'reasons'        => $sig['reasons'],
+            'context'        => $sig['context'],
+            'opened_ts'      => time(),
+            'stop_history'   => [],
+        ]);
+        return 'opened';
+    }
+
     /** Generate a stable id for a signal so dedup is deterministic. */
     public static function signalId(string $asOf, string $symbol, string $setup): string
     {
