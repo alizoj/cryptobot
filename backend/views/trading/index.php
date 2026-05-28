@@ -254,9 +254,18 @@ $navBtn = static function (string $label, array $route, bool $active): string {
     <?php if (empty($open)): ?>
         <div class="card card-section"><div class="card-body text-secondary">No open positions.</div></div>
     <?php else: ?>
+        <?= Html::beginForm(['close-bulk'], 'post', ['id' => 'bulkForm', 'class' => 'd-inline']) ?><?= Html::endForm() ?>
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <button type="submit" form="bulkForm" class="btn btn-sm btn-outline-danger" id="bulk-close-btn" disabled
+                    onclick="return confirm('Close ' + (document.getElementById('bulk-count').textContent || '0') + ' selected position(s) and re-scan?')">
+                Close selected (<span id="bulk-count">0</span>)
+            </button>
+            <span class="small text-secondary">— or use the header checkbox to select all.</span>
+        </div>
         <div class="card card-section"><div class="table-responsive">
-            <table class="table tr-table align-middle">
+            <table class="table tr-table align-middle" id="open-positions-table">
                 <thead><tr>
+                    <th style="width:32px"><input type="checkbox" class="form-check-input" id="bulk-master" title="Select all"></th>
                     <th>Opened</th><th>Symbol</th><th>Setup</th><th>Side</th>
                     <th class="text-end">Entry</th><th class="text-end">Stop</th>
                     <th class="text-end">Last</th>
@@ -267,6 +276,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                 <tbody>
                 <?php foreach ($open as $p): $side = $p['side'] ?? ''; ?>
                     <tr class="row-<?= $side === 'short' ? 'short' : 'long' ?>">
+                        <td><input type="checkbox" class="form-check-input bulk-check" name="ids[]" value="<?= Html::encode((string)($p['id'] ?? '')) ?>" form="bulkForm"></td>
                         <td class="small text-secondary"><?= Html::encode($p['entry_day'] ?? '') ?></td>
                         <td><strong><?= Html::encode($p['symbol'] ?? '') ?></strong></td>
                         <td><?= $setupBadge($p['setup'] ?? null) ?></td>
@@ -298,6 +308,29 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                 </tbody>
             </table>
         </div></div>
+        <?php $this->registerJs(<<<'JS'
+        (function () {
+            var master = document.getElementById('bulk-master');
+            var btn    = document.getElementById('bulk-close-btn');
+            var count  = document.getElementById('bulk-count');
+            var checks = document.querySelectorAll('#open-positions-table .bulk-check');
+            if (!master || !btn || !count) return;
+            function refresh() {
+                var n = 0;
+                checks.forEach(function (c) { if (c.checked) n++; });
+                count.textContent = String(n);
+                btn.disabled = (n === 0);
+                master.checked = (n > 0 && n === checks.length);
+                master.indeterminate = (n > 0 && n < checks.length);
+            }
+            master.addEventListener('change', function () {
+                checks.forEach(function (c) { c.checked = master.checked; });
+                refresh();
+            });
+            checks.forEach(function (c) { c.addEventListener('change', refresh); });
+            refresh();
+        })();
+        JS); ?>
     <?php endif; ?>
 
     <!-- recent signals -->

@@ -42,6 +42,7 @@ final class TradingController extends Controller
                     'test-telegram'  => ['post'],
                     'save-settings'  => ['post'],
                     'close-position' => ['post'],
+                    'close-bulk'     => ['post'],
                 ],
             ],
         ];
@@ -157,6 +158,73 @@ final class TradingController extends Controller
             $closing['symbol'], $closing['setup'],
             rtrim(rtrim(sprintf('%.6f', $exitPx), '0'), '.'),
             $pnlPct * 100, $opened,
+        ));
+        return $this->redirect(['index']);
+    }
+
+    /**
+     * Bulk-close: same semantics as actionClosePosition but for a list of ids
+     * submitted as `ids[]`. The re-scan runs once at the end, not per-close.
+     */
+    public function actionCloseBulk(): Response
+    {
+        $ids = (array)Yii::$app->request->post('ids', []);
+        $ids = array_values(array_filter(array_map('strval', $ids), static fn($s) => $s !== ''));
+        if ($ids === []) {
+            Yii::$app->session->setFlash('error', 'No positions selected.');
+            return $this->redirect(['index']);
+        }
+
+        $store = new PositionStore();
+        $md    = new MarketData();
+        $idSet = array_flip($ids);
+
+        $closing   = [];
+        $remaining = [];
+        foreach ($store->openPositions() as $p) {
+            if (isset($idSet[(string)($p['id'] ?? '')])) {
+                $closing[] = $p;
+            } else {
+                $remaining[] = $p;
+            }
+        }
+        if ($closing === []) {
+            Yii::$app->session->setFlash('error', 'None of the selected positions were found.');
+            return $this->redirect(['index']);
+        }
+
+        foreach ($closing as $p) {
+            $candles = $md->dailyCandles((string)$p['symbol']);
+            $last    = $candles !== [] ? end($candles) : null;
+            $entry   = (float)$p['entry_px'];
+            $exitPx  = $last !== null ? (float)$last['c'] : $entry;
+            $pnlPct  = $entry > 0
+                ? (($p['side'] ?? '') === 'long' ? $exitPx / $entry - 1 : $entry / $exitPx - 1)
+                : 0.0;
+            $p['outcome'] = [
+                'exit_ts'     => time(),
+                'exit_day'    => gmdate('Y-m-d'),
+                'exit_px'     => $exitPx,
+                'exit_reason' => 'manual_close',
+                'pnl_pct'     => $pnlPct,
+            ];
+            $store->appendClosed($p);
+        }
+        $store->replaceOpen($remaining);
+
+        $cap    = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        $engine = new SignalEngine();
+        $opened = 0;
+        foreach ($engine->scan(null)['signals'] as $sig) {
+            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
+        }
+        foreach ($engine->scanIntraday(null)['signals'] as $sig) {
+            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
+        }
+
+        Yii::$app->session->setFlash('success', sprintf(
+            'Closed %d position(s). %d new position(s) opened from re-scan.',
+            count($closing), $opened,
         ));
         return $this->redirect(['index']);
     }
