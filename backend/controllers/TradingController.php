@@ -45,12 +45,41 @@ final class TradingController extends Controller
     public function actionIndex(): string
     {
         $store = new PositionStore();
+        $md    = new MarketData();
+        $open  = $store->openPositions();
+
+        $unrealisedUsd = 0.0;
+        foreach ($open as &$p) {
+            $candles = $md->dailyCandles((string)($p['symbol'] ?? ''));
+            $last = $candles !== [] ? end($candles) : null;
+            $entry = (float)($p['entry_px'] ?? 0);
+            if ($last === null || $entry <= 0) {
+                $p['last_px'] = $p['last_ts'] = $p['pnl_pct'] = $p['pnl_usd'] = null;
+                continue;
+            }
+            $lastPx = (float)$last['c'];
+            $units  = (float)($p['size']['size_units'] ?? 0);
+            $pct = ($p['side'] ?? '') === 'long'
+                ? $lastPx / $entry - 1
+                : $entry / $lastPx - 1;
+            $usd = ($p['side'] ?? '') === 'long'
+                ? ($lastPx - $entry) * $units
+                : ($entry - $lastPx) * $units;
+            $p['last_px'] = $lastPx;
+            $p['last_ts'] = (int)$last['ts'];
+            $p['pnl_pct'] = $pct;
+            $p['pnl_usd'] = $usd;
+            $unrealisedUsd += $usd;
+        }
+        unset($p);
+
         return $this->render('index', [
-            'open'    => $store->openPositions(),
+            'open'    => $open,
             'closed'  => array_slice($store->closedPositions(), -25),
             'signals' => array_reverse($store->recentSignals(40)),
             'telegramConfigured' => (new TelegramNotifier())->isConfigured(),
             'params'  => Yii::$app->params['trading'] ?? [],
+            'unrealisedUsd' => $unrealisedUsd,
         ]);
     }
 

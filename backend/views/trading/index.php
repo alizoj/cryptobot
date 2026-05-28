@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var list<array<string, mixed>> $signals */
 /** @var bool $telegramConfigured */
 /** @var array<string, mixed> $params */
+/** @var float $unrealisedUsd */
 
 use yii\helpers\Html;
 
@@ -38,6 +39,11 @@ $pnlCell = static function (?float $f): string {
     if ($f === null) return '<span class="text-muted">—</span>';
     $cls = $f >= 0 ? 'pnl-pos' : 'pnl-neg';
     return '<span class="' . $cls . ' num">' . ($f >= 0 ? '+' : '') . number_format($f * 100, 2) . '%</span>';
+};
+$pnlUsdCell = static function (?float $usd): string {
+    if ($usd === null) return '<span class="text-muted">—</span>';
+    $cls = $usd >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return '<span class="' . $cls . ' num">' . ($usd >= 0 ? '+$' : '-$') . number_format(abs($usd), 2) . '</span>';
 };
 $pnlOf = static function (array $p): ?float {
     $e = (float)($p['entry_px'] ?? 0);
@@ -113,7 +119,12 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             <div class="card kpi-card h-100"><div class="card-body">
                 <div class="kpi-label">Open positions</div>
                 <div class="kpi-val"><?= count($open) ?></div>
-                <div class="kpi-sub num">$<?= number_format($openNotional, 0) ?> notional</div>
+                <div class="kpi-sub num">
+                    $<?= number_format($openNotional, 0) ?> notional
+                    <?php if (!empty($open)): ?>
+                        · <?= $pnlUsdCell($unrealisedUsd) ?>
+                    <?php endif; ?>
+                </div>
             </div></div>
         </div>
         <div class="col">
@@ -173,7 +184,10 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                 <thead><tr>
                     <th>Opened</th><th>Symbol</th><th>Setup</th><th>Side</th>
                     <th class="text-end">Entry</th><th class="text-end">Stop</th>
-                    <th class="text-end">Units</th><th class="text-end">Notional</th><th class="text-end">Risk</th><th></th>
+                    <th class="text-end">Last</th>
+                    <th class="text-end">Units</th><th class="text-end">Notional</th><th class="text-end">Risk</th>
+                    <th class="text-end">P&amp;L %</th><th class="text-end">P&amp;L $</th>
+                    <th></th>
                 </tr></thead>
                 <tbody>
                 <?php foreach ($open as $p): $side = $p['side'] ?? ''; ?>
@@ -184,9 +198,12 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                         <td><?= $sidePill($side) ?></td>
                         <td class="text-end num"><?= $fmtPx($p['entry_px'] ?? null) ?></td>
                         <td class="text-end num"><?= $fmtPx($p['stop_px'] ?? null) ?></td>
+                        <td class="text-end num" title="<?= $p['last_ts'] ? gmdate('Y-m-d', (int)$p['last_ts']) . ' close' : '' ?>"><?= $fmtPx($p['last_px'] ?? null) ?></td>
                         <td class="text-end num"><?= number_format((float)($p['size']['size_units'] ?? 0), 4) ?></td>
                         <td class="text-end num">$<?= number_format((float)($p['size']['notional_usd'] ?? 0), 0) ?></td>
                         <td class="text-end num">$<?= number_format((float)($p['size']['risk_usd'] ?? 0), 0) ?></td>
+                        <td class="text-end"><?= $pnlCell($p['pnl_pct'] ?? null) ?></td>
+                        <td class="text-end"><?= $pnlUsdCell($p['pnl_usd'] ?? null) ?></td>
                         <td class="text-end"><?= $chartLink($p['symbol'] ?? null, $p['entry_px'] ?? null, $p['stop_px'] ?? null, $side, $p['setup'] ?? null, $p['entry_day'] ?? null) ?></td>
                     </tr>
                 <?php endforeach; ?>
