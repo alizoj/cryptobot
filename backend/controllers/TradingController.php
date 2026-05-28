@@ -140,6 +140,7 @@ final class TradingController extends Controller
         ?string $side = null,
         ?string $setup = null,
         ?string $asOf = null,
+        int $zoom = 90,
     ): string {
         $symbol  = strtoupper($symbol);
         $candles = (new MarketData())->dailyCandles($symbol);
@@ -159,6 +160,17 @@ final class TradingController extends Controller
             ];
         }
 
+        // Default visible window = last $zoom days (clamped to [14, 365]) so
+        // candles render at a useful size; older bars stay scrollable.
+        $zoom = max(14, min(365, $zoom));
+        $lastTs    = (int)$series[count($series) - 1]['time'];
+        $visibleFrom = $lastTs - $zoom * 86400;
+        $visibleTo   = $lastTs + 5 * 86400;  // small right-side padding
+
+        // S/R levels: 5-bar fractal pivots over the trailing ~zoom+30 candles,
+        // keep the 3 most-recent uniques on each side (deduped within 0.5%).
+        [$support, $resistance] = self::supportResistance($series, $zoom + 30);
+
         return $this->render('chart', [
             'symbol' => $symbol,
             'series' => $series,
@@ -167,7 +179,60 @@ final class TradingController extends Controller
             'side'   => $side,
             'setup'  => $setup,
             'asOf'   => $asOf,
+            'zoom'   => $zoom,
+            'visibleFrom' => $visibleFrom,
+            'visibleTo'   => $visibleTo,
+            'support'     => $support,
+            'resistance'  => $resistance,
         ]);
+    }
+
+    /**
+     * Williams-fractal pivots over the trailing $lookback bars; returns the
+     * three most-recent unique support and resistance prices (dedup within
+     * 0.5%). Most-recent first.
+     *
+     * @param list<array{time:int,open:float,high:float,low:float,close:float}> $series
+     * @return array{0:list<float>,1:list<float>}
+     */
+    private static function supportResistance(array $series, int $lookback, int $k = 2, int $keep = 3, float $minSepPct = 0.005): array
+    {
+        $window = array_slice($series, -max($lookback, 2 * $k + 1));
+        $n = count($window);
+        $highs = [];
+        $lows  = [];
+        for ($i = $k; $i < $n - $k; $i++) {
+            $h = $window[$i]['high'];
+            $l = $window[$i]['low'];
+            $isHigh = true;
+            $isLow  = true;
+            for ($j = 1; $j <= $k; $j++) {
+                if ($window[$i - $j]['high'] >= $h || $window[$i + $j]['high'] >= $h) $isHigh = false;
+                if ($window[$i - $j]['low']  <= $l || $window[$i + $j]['low']  <= $l) $isLow  = false;
+                if (!$isHigh && !$isLow) break;
+            }
+            if ($isHigh) $highs[] = $h;
+            if ($isLow)  $lows[]  = $l;
+        }
+        return [self::dedupRecent($lows, $keep, $minSepPct), self::dedupRecent($highs, $keep, $minSepPct)];
+    }
+
+    /** @param list<float> $pivots @return list<float> most-recent first, dedup within $minSepPct */
+    private static function dedupRecent(array $pivots, int $keep, float $minSepPct): array
+    {
+        $out = [];
+        for ($i = count($pivots) - 1; $i >= 0 && count($out) < $keep; $i--) {
+            $p = $pivots[$i];
+            $tooClose = false;
+            foreach ($out as $q) {
+                if (abs($p - $q) / max($q, 1e-12) < $minSepPct) {
+                    $tooClose = true;
+                    break;
+                }
+            }
+            if (!$tooClose) $out[] = $p;
+        }
+        return $out;
     }
 
     public function actionTestTelegram(): Response

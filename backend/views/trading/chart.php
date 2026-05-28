@@ -10,6 +10,11 @@ declare(strict_types=1);
 /** @var string|null $side */
 /** @var string|null $setup */
 /** @var string|null $asOf */
+/** @var int $zoom */
+/** @var int $visibleFrom */
+/** @var int $visibleTo */
+/** @var list<float> $support */
+/** @var list<float> $resistance */
 
 use yii\helpers\Html;
 use yii\helpers\Json;
@@ -29,13 +34,26 @@ if ($asOf !== null && $asOf !== '') {
 }
 
 $cfg = Json::encode([
-    'series'     => $series,
-    'entry'      => $entry,
-    'stop'       => $stop,
-    'entryColor' => $entryColor,
-    'side'       => $side,
-    'markerTime' => $markerTime,
+    'series'      => $series,
+    'entry'       => $entry,
+    'stop'        => $stop,
+    'entryColor'  => $entryColor,
+    'side'        => $side,
+    'markerTime'  => $markerTime,
+    'visibleFrom' => $visibleFrom,
+    'visibleTo'   => $visibleTo,
+    'support'     => $support,
+    'resistance'  => $resistance,
 ]);
+
+$zoomBtn = static function (int $days, int $current) use ($symbol, $entry, $stop, $side, $setup, $asOf): string {
+    $cls = 'btn btn-sm ' . ($days === $current ? 'btn-primary' : 'btn-outline-secondary');
+    return Html::a($days . 'd', [
+        'chart',
+        'symbol' => $symbol, 'entry' => $entry, 'stop' => $stop,
+        'side'   => $side,   'setup' => $setup, 'asOf' => $asOf, 'zoom' => $days,
+    ], ['class' => $cls]);
+};
 ?>
 <div class="container py-4">
     <p><?= Html::a('&laquo; back', ['scan-preview', 'asOf' => $asOf], ['class' => 'small']) ?></p>
@@ -52,7 +70,22 @@ $cfg = Json::encode([
         <?php if ($stop !== null): ?>stop <strong><?= $stop ?></strong><?php endif; ?>
     </p>
 
-    <div id="tv-chart" style="width:100%;height:520px;"></div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+        <span class="small text-muted me-1">Zoom:</span>
+        <div class="btn-group" role="group">
+            <?= $zoomBtn(30, $zoom) ?>
+            <?= $zoomBtn(60, $zoom) ?>
+            <?= $zoomBtn(90, $zoom) ?>
+            <?= $zoomBtn(180, $zoom) ?>
+            <?= $zoomBtn(365, $zoom) ?>
+        </div>
+        <span class="small text-muted ms-auto">
+            <span style="color:#10b981">━━</span> support &nbsp;
+            <span style="color:#ef4444">━━</span> resistance
+        </span>
+    </div>
+
+    <div id="tv-chart" style="width:100%;height:560px;"></div>
 </div>
 
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
@@ -63,10 +96,10 @@ $js = <<<JS
     var el = document.getElementById('tv-chart');
     var chart = LightweightCharts.createChart(el, {
         width: el.clientWidth,
-        height: 520,
+        height: 560,
         layout: { background: { color: '#ffffff' }, textColor: '#333' },
         grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
-        timeScale: { timeVisible: false, borderColor: '#ccc' },
+        timeScale: { timeVisible: false, borderColor: '#ccc', rightOffset: 4 },
         rightPriceScale: { borderColor: '#ccc' },
     });
 
@@ -77,16 +110,32 @@ $js = <<<JS
     });
     candleSeries.setData(cfg.series);
 
+    // Support / resistance from server-computed pivots.
+    (cfg.support || []).forEach(function (px) {
+        candleSeries.createPriceLine({
+            price: px, color: '#10b981',
+            lineWidth: 1, lineStyle: 3 /* Dotted */,
+            axisLabelVisible: true, title: 'S',
+        });
+    });
+    (cfg.resistance || []).forEach(function (px) {
+        candleSeries.createPriceLine({
+            price: px, color: '#ef4444',
+            lineWidth: 1, lineStyle: 3 /* Dotted */,
+            axisLabelVisible: true, title: 'R',
+        });
+    });
+
     if (cfg.entry !== null) {
         candleSeries.createPriceLine({
             price: cfg.entry, color: cfg.entryColor || '#16a34a',
-            lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'entry',
+            lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'entry',
         });
     }
     if (cfg.stop !== null) {
         candleSeries.createPriceLine({
             price: cfg.stop, color: '#f59e0b',
-            lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'stop',
+            lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'stop',
         });
     }
     if (cfg.markerTime !== null) {
@@ -100,7 +149,9 @@ $js = <<<JS
         }]);
     }
 
-    chart.timeScale().fitContent();
+    // Zoom to the last N days (server-resolved); user can scroll left to see more.
+    chart.timeScale().setVisibleRange({ from: cfg.visibleFrom, to: cfg.visibleTo });
+
     window.addEventListener('resize', function () {
         chart.applyOptions({ width: el.clientWidth });
     });
