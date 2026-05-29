@@ -27,11 +27,23 @@ use yii\queue\RetryableJobInterface;
  */
 final class ScanSignalsJob extends BaseObject implements JobInterface, RetryableJobInterface
 {
+    /**
+     * Redis key holding the "current" recurring-chain generation. Each
+     * `trading/schedule-hourly` bumps it; a recurring job only reschedules
+     * itself while its own {@see $scheduleGen} still matches. This makes
+     * re-running schedule-hourly idempotent — old chains stop instead of
+     * piling up parallel hourly loops.
+     */
+    public const SCHEDULE_GEN_KEY = 'crypto:scan_schedule_gen';
+
     /** Re-enqueue another scan {@see $intervalSeconds} later (hourly loop). */
     public bool $recurring = false;
 
     /** Delay before the next recurring run. 3600 = hourly. */
     public int $intervalSeconds = 3600;
+
+    /** Generation token of the chain this job belongs to (null = untracked). */
+    public ?int $scheduleGen = null;
 
     /** Where this run came from — for the log only ('dashboard', 'schedule', 'cli'). */
     public string $source = 'cli';
@@ -55,12 +67,37 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
             Yii::error('ScanSignalsJob failed: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), $tag);
         } finally {
             if ($this->recurring && $queue instanceof Queue) {
-                $queue->delay($this->intervalSeconds)->push(new self([
-                    'recurring'       => true,
-                    'intervalSeconds' => $this->intervalSeconds,
-                    'source'          => 'schedule',
-                ]));
+                $myGen  = $this->scheduleGen ?? null;
+                $curGen = self::currentScheduleGen();
+                // Reschedule only if this job still belongs to the current
+                // chain. A newer schedule-hourly bumps the generation, so any
+                // older chain fires at most once more and then stops here —
+                // no duplicate hourly loops. If the generation can't be read
+                // (null), keep the chain alive so a transient blip never kills
+                // scheduling.
+                $isCurrentChain = $curGen === null || ($myGen !== null && $myGen === $curGen);
+                if ($isCurrentChain) {
+                    $queue->delay($this->intervalSeconds)->push(new self([
+                        'recurring'       => true,
+                        'intervalSeconds' => $this->intervalSeconds,
+                        'source'          => 'schedule',
+                        'scheduleGen'     => $myGen ?? $curGen,
+                    ]));
+                } else {
+                    Yii::info("ScanSignalsJob: stale chain (gen={$myGen}, current={$curGen}) — stopping, not rescheduling.", $tag);
+                }
             }
+        }
+    }
+
+    /** Current recurring-chain generation from Redis, or null if untracked/unreadable. */
+    public static function currentScheduleGen(): ?int
+    {
+        try {
+            $v = Yii::$app->redis->get(self::SCHEDULE_GEN_KEY);
+            return ($v === null || $v === false) ? null : (int)$v;
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

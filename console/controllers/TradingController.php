@@ -338,23 +338,32 @@ final class TradingController extends Controller
     }
 
     /**
-     * Start the hourly scan loop (queue-native, no cron). Pushes one recurring
-     * job that re-enqueues the next run $intervalSeconds later — so run this
-     * ONCE. The only long-lived process you then need is the worker:
+     * Start (or restart) the hourly scan loop (queue-native, no cron). Pushes
+     * one recurring job that re-enqueues the next run $intervalSeconds later.
      *
-     *   ./yii trading/schedule-hourly        # start the loop (default 3600s)
+     * Safe to re-run: each call bumps a generation token in Redis, and a
+     * recurring job only reschedules itself while its generation is current.
+     * So running this again supersedes the previous chain — any older loop
+     * fires at most once more and then stops, instead of piling up parallel
+     * hourly loops. No need to clear the queue first.
+     *
+     *   ./yii trading/schedule-hourly        # start/restart the loop (default 3600s)
      *   ./yii queue/listen --verbose=1       # worker that runs the jobs
      */
     public function actionScheduleHourly(int $intervalSeconds = 3600): int
     {
+        $gen = (int)Yii::$app->redis->incr(ScanSignalsJob::SCHEDULE_GEN_KEY);
         $id = Yii::$app->queue->push(new ScanSignalsJob([
             'recurring'       => true,
             'intervalSeconds' => $intervalSeconds,
             'source'          => 'schedule',
+            'scheduleGen'     => $gen,
         ]));
-        $this->stdout("started hourly scan loop (interval={$intervalSeconds}s, job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("started hourly scan loop (interval={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
+        if ($gen > 1) {
+            $this->stdout("Superseded the previous chain — older loops stop after their next run.\n", Console::FG_YELLOW);
+        }
         $this->stdout("Run the worker to process it: ./yii queue/listen --verbose=1\n");
-        $this->stdout("Run this command only once — each run re-enqueues itself.\n", Console::FG_YELLOW);
         return ExitCode::OK;
     }
 
