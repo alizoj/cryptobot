@@ -5,17 +5,23 @@ declare(strict_types=1);
 namespace common\services\Trading;
 
 /**
- * Sizing overrides editable from the /trading dashboard.
+ * Account-size override editable from the /trading dashboard.
  *
  * Persisted to {@see Paths::uiSettings()} and merged into
  * `Yii::$app->params['trading']` by {@see \common\bootstrap\TradingSettingsBootstrap}
- * so every sizing/display call site picks them up uniformly.
+ * so every sizing/display call site picks it up uniformly.
  *
- * Exposed knobs: equity, per-trade risk %, max-notional %, max open positions.
- * Strategy parameters stay in `common/config/params.php`.
+ * Only **Equity (USD)** is user-editable. Every other knob (per-trade risk,
+ * max-notional, max open positions, filters, …) is intentionally locked to the
+ * tuned Experiment-8 defaults in `common/config/params.php` — the best setup
+ * for finding signals. {@see load()} filters persisted state down to the
+ * allowed keys, so even a stale settings file can't override those defaults.
  */
 final class UiSettings
 {
+    /** The only keys we read back / apply. Everything else stays at params.php defaults. */
+    private const ALLOWED_KEYS = ['equityUsd', 'updated_at'];
+
     /** Named presets surfaced as one-click templates in the UI. */
     public const TEMPLATES = [
         'conservative' => [
@@ -46,7 +52,7 @@ final class UiSettings
     /** Keys that should be persisted/applied as integers (not floats). */
     private const INT_KEYS = ['maxConcurrentSingles'];
 
-    /** @return array<string,mixed> {equityUsd?,riskPct?,maxNotionalPct?,template?,updated_at?} */
+    /** @return array<string,mixed> {equityUsd?,updated_at?} — filtered to {@see ALLOWED_KEYS}. */
     public static function load(): array
     {
         $path = Paths::uiSettings();
@@ -54,7 +60,12 @@ final class UiSettings
             return [];
         }
         $raw = json_decode((string)file_get_contents($path), true);
-        return is_array($raw) ? $raw : [];
+        if (!is_array($raw)) {
+            return [];
+        }
+        // Drop any legacy keys (riskPct, maxNotionalPct, maxConcurrentSingles,
+        // template) so locked knobs always fall back to params.php defaults.
+        return array_intersect_key($raw, array_flip(self::ALLOWED_KEYS));
     }
 
     /**
@@ -77,42 +88,18 @@ final class UiSettings
     }
 
     /**
-     * Resolve settings from the submitted form.
-     *
-     *   - equityUsd and maxConcurrentSingles are always taken from the inputs
-     *     (presets don't dictate account size or position-count discipline).
-     *   - When a named template is chosen, riskPct and maxNotionalPct come from
-     *     the preset (the corresponding form fields are ignored).
-     *   - When template = "custom", riskPct and maxNotionalPct come from inputs.
+     * Resolve settings from the submitted form. Only Equity (USD) is accepted;
+     * every other knob is locked to the params.php defaults, so any extra POST
+     * fields are ignored.
      *
      * @param array<string,mixed> $input
      * @return array<string,mixed>
      */
     public static function resolve(array $input): array
     {
-        $tpl = isset($input['template']) ? (string)$input['template'] : 'custom';
-        $named = $tpl !== 'custom' && isset(self::TEMPLATES[$tpl]);
-
-        $out = ['template' => $named ? $tpl : 'custom'];
-
+        $out = [];
         if (array_key_exists('equityUsd', $input) && $input['equityUsd'] !== '' && $input['equityUsd'] !== null) {
             $out['equityUsd'] = (float)$input['equityUsd'];
-        }
-        if (array_key_exists('maxConcurrentSingles', $input) && $input['maxConcurrentSingles'] !== '' && $input['maxConcurrentSingles'] !== null) {
-            $out['maxConcurrentSingles'] = (int)$input['maxConcurrentSingles'];
-        }
-
-        if ($named) {
-            $preset = self::TEMPLATES[$tpl];
-            $out['riskPct']        = (float)$preset['riskPct'];
-            $out['maxNotionalPct'] = (float)$preset['maxNotionalPct'];
-            return $out;
-        }
-        foreach (['riskPct', 'maxNotionalPct'] as $k) {
-            if (array_key_exists($k, $input) && $input[$k] !== '' && $input[$k] !== null) {
-                // Form expresses % as percent (e.g. "0.5", "20"); convert to fraction.
-                $out[$k] = (float)$input[$k] / 100.0;
-            }
         }
         return $out;
     }

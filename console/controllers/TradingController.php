@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace console\controllers;
 
+use common\jobs\ScanSignalsJob;
 use common\services\Trading\ChartRenderer;
 use common\services\Trading\DataFetcher;
 use common\services\Trading\MarketData;
 use common\services\Trading\Paths;
 use common\services\Trading\PositionManager;
 use common\services\Trading\PositionStore;
+use common\services\Trading\ScanRunner;
 use common\services\Trading\SignalEngine;
 use common\services\Trading\TelegramNotifier;
 use Yii;
@@ -30,15 +32,16 @@ use yii\helpers\Console;
  *   ./yii trading/test-telegram       — send a hello-world to confirm credentials
  *   ./yii trading/test-chart SYMBOL   — render a candlestick chart and send it (verifies image pipeline)
  *   ./yii trading/status              — print open positions + last signals
+ *   ./yii trading/queue-scan          — push a one-off scan onto the queue (same as the dashboard button)
+ *   ./yii trading/schedule-hourly     — start the hourly self-rescheduling scan loop (queue-native)
  *
- * Recommended cron (server timezone irrelevant — all logic is in UTC):
+ * Scanning now runs through the queue, not cron. Start it once and keep a
+ * worker alive (timezone irrelevant — all logic is in UTC):
  *
- *   5 0    * * *  cd /path/to/project && ./yii trading/run-daily  >> runtime/logs/trading.log 2>&1
- *   5 *    * * *  cd /path/to/project && ./yii trading/run-hourly >> runtime/logs/trading.log 2>&1
- *   2 0,4,8,12,16,20 * * *  cd /path/to/project && ./yii trading/scan-4h >> runtime/logs/trading.log 2>&1
+ *   ./yii trading/schedule-hourly                 # enqueue the recurring hourly scan (run once)
+ *   ./yii queue/listen --verbose=1                # long-lived worker (use supervisor / a service in prod)
  *
- * On Windows use Task Scheduler with the same schedule; see
- * docs/TRADING_BOT_SETUP.md for the exact actions.
+ * See docs/TRADING_BOT_SETUP.md §4 for the production worker + queue settings.
  */
 final class TradingController extends Controller
 {
@@ -113,58 +116,17 @@ final class TradingController extends Controller
         }
         $this->stdout("  signals=" . count($result['signals']) . "\n");
 
-        $store    = new PositionStore();
+        // One-line scan summary first (console only — the hourly queue job stays
+        // quiet on empty scans to avoid 24 "0 signals" messages a day).
         $notifier = new TelegramNotifier();
-        $chart    = new ChartRenderer();
-        $md       = new MarketData();
-
-        // Send a one-line scan summary first
-        $summary = TelegramNotifier::formatScanSummary($asOf, count($result['signals']), $diag);
+        $summary  = TelegramNotifier::formatScanSummary($asOf, count($result['signals']), $diag);
         $this->maybeSend($notifier, $summary, 'scan_summary');
 
-        $maxConcurrent = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
-        $opened = $deduped = $capped = 0;
-        foreach ($result['signals'] as $sig) {
-            $id = PositionStore::signalId($sig['as_of'], $sig['symbol'], $sig['setup']);
-
-            $msg = TelegramNotifier::formatEntrySignal($sig);
-            $sendResult = $this->maybeSend($notifier, $msg, $id);
-
-            if ($chart->isEnabled() && ($sendResult['ok'] ?? false)) {
-                $url = $chart->urlForSignal($sig, $md->dailyCandles($sig['symbol']));
-                if ($url !== null) {
-                    $caption = sprintf('%s %s %s', $sig['setup'], $sig['symbol'], strtoupper($sig['side']));
-                    $photoRes = $notifier->sendPhoto($url, $caption);
-                    if (!($photoRes['ok'] ?? false)) {
-                        $this->stderr("    chart send FAILED ({$id}): " . ($photoRes['error'] ?? '?') . "\n", Console::FG_YELLOW);
-                    }
-                } else {
-                    $this->stderr("    chart build FAILED ({$id})\n", Console::FG_YELLOW);
-                }
-            }
-
-            $store->logSignal([
-                'id'      => $id,
-                'kind'    => 'entry',
-                'ts'      => time(),
-                'sent_ok' => $sendResult['ok'] ?? false,
-                'signal'  => $sig,
-            ]);
-
-            $outcome = $this->dryRun ? 'dry_run' : $store->openFromSignal($sig, $maxConcurrent);
-            if ($outcome === 'opened')      $opened++;
-            if ($outcome === 'dedup')       $deduped++;
-            if ($outcome === 'cap_reached') $capped++;
-
-            $this->stdout(sprintf("  %s %-8s %-3s %-4s entry=%s stop=%s sent=%s open=%s\n",
-                $sig['setup'], $sig['symbol'], strtoupper($sig['side']), $sig['method'],
-                $sig['entry_px'] !== null ? rtrim(rtrim(sprintf('%.6f', $sig['entry_px']), '0'), '.') : 'mkt',
-                rtrim(rtrim(sprintf('%.6f', $sig['stop_px']), '0'), '.'),
-                ($sendResult['ok'] ?? false) ? 'yes' : 'no',
-                $outcome,
-            ));
-        }
-        $this->stdout("  opened=$opened dedup=$deduped capped=$capped cap=$maxConcurrent\n");
+        $counts = (new ScanRunner())->emitSignals(
+            $result['signals'], $this->dryRun,
+            fn(string $l) => $this->stdout("  $l\n"),
+        );
+        $this->stdout("  opened={$counts['opened']} dedup={$counts['dedup']} capped={$counts['capped']} cap={$counts['cap']}\n");
         return ExitCode::OK;
     }
 
@@ -190,47 +152,11 @@ final class TradingController extends Controller
         $this->stdout(sprintf("  scanned %d/%d  signals=%d\n",
             $diag['symbols_scanned'], $diag['symbols_total'], count($result['signals'])));
 
-        $store    = new PositionStore();
-        $notifier = new TelegramNotifier();
-        $chart    = new ChartRenderer();
-        $md       = new MarketData();
-
-        $maxConcurrent = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
-        $opened = $deduped = $capped = 0;
-        foreach ($result['signals'] as $sig) {
-            $id = PositionStore::signalId($sig['as_of'], $sig['symbol'], $sig['setup']);
-
-            $msg = TelegramNotifier::formatEntrySignal($sig);
-            $sendResult = $this->maybeSend($notifier, $msg, $id);
-
-            if ($chart->isEnabled() && ($sendResult['ok'] ?? false)) {
-                $url = $chart->urlForSignal($sig, $md->dailyCandles($sig['symbol']));
-                if ($url !== null) {
-                    $notifier->sendPhoto($url, sprintf('%s %s %s', $sig['setup'], $sig['symbol'], strtoupper($sig['side'])));
-                }
-            }
-
-            $store->logSignal([
-                'id'      => $id,
-                'kind'    => 'entry',
-                'ts'      => time(),
-                'sent_ok' => $sendResult['ok'] ?? false,
-                'signal'  => $sig,
-            ]);
-
-            $outcome = $this->dryRun ? 'dry_run' : $store->openFromSignal($sig, $maxConcurrent);
-            if ($outcome === 'opened')      $opened++;
-            if ($outcome === 'dedup')       $deduped++;
-            if ($outcome === 'cap_reached') $capped++;
-
-            $this->stdout(sprintf("  %s %-8s %-5s stop=%s sent=%s open=%s\n",
-                $sig['setup'], $sig['symbol'], strtoupper($sig['side']),
-                rtrim(rtrim(sprintf('%.6f', $sig['stop_px']), '0'), '.'),
-                ($sendResult['ok'] ?? false) ? 'yes' : 'no',
-                $outcome,
-            ));
-        }
-        $this->stdout("  opened=$opened dedup=$deduped capped=$capped cap=$maxConcurrent\n");
+        $counts = (new ScanRunner())->emitSignals(
+            $result['signals'], $this->dryRun,
+            fn(string $l) => $this->stdout("  $l\n"),
+        );
+        $this->stdout("  opened={$counts['opened']} dedup={$counts['dedup']} capped={$counts['capped']} cap={$counts['cap']}\n");
         return ExitCode::OK;
     }
 
@@ -241,28 +167,11 @@ final class TradingController extends Controller
         $asOf = $this->resolveAsOf(allowToday: true);
         $this->stdout("[manage-positions] as_of={$asOf} dry_run=" . ($this->dryRun ? 'yes' : 'no') . "\n", Console::FG_GREEN);
 
-        $manager  = new PositionManager();
-        $store    = new PositionStore();
-        $notifier = new TelegramNotifier();
-
-        $events = $manager->manage($asOf);
-        $this->stdout("  events=" . count($events) . "\n");
-
-        foreach ($events as $ev) {
-            $id = "manage-{$asOf}-{$ev['symbol']}-{$ev['setup']}-{$ev['kind']}";
-            $msg = TelegramNotifier::formatExitSignal($ev);
-            $send = $this->maybeSend($notifier, $msg, $id);
-
-            $store->logSignal([
-                'id'      => $id,
-                'kind'    => 'manage',
-                'ts'      => time(),
-                'sent_ok' => $send['ok'] ?? false,
-                'event'   => $ev,
-            ]);
-            $this->stdout(sprintf("  %-18s %-8s %-3s sent=%s\n",
-                $ev['kind'], $ev['symbol'], $ev['setup'], ($send['ok'] ?? false) ? 'yes' : 'no'));
-        }
+        $events = (new PositionManager())->manage($asOf);
+        (new ScanRunner())->emitEvents(
+            $events, $asOf, $this->dryRun,
+            fn(string $l) => $this->stdout("  $l\n"),
+        );
         return ExitCode::OK;
     }
 
@@ -410,6 +319,42 @@ final class TradingController extends Controller
                 gmdate('Y-m-d H:i', (int)($s['ts'] ?? 0)), $kind, $what, $setup, $sent));
         }
         $this->stdout("\nState files: " . Paths::stateDir() . "\n");
+        return ExitCode::OK;
+    }
+
+    // ---------- queue ----------
+
+    /**
+     * Push a one-off signal scan onto the queue — the same pipeline the
+     * dashboard "Scan now" button uses (refresh prices → manage → daily + 4h
+     * scan). A worker must be running to process it: `./yii queue/listen`.
+     */
+    public function actionQueueScan(): int
+    {
+        $id = Yii::$app->queue->push(new ScanSignalsJob(['source' => 'cli']));
+        $this->stdout("queued one-off scan (job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("Process it with a worker: ./yii queue/listen --verbose=1\n");
+        return ExitCode::OK;
+    }
+
+    /**
+     * Start the hourly scan loop (queue-native, no cron). Pushes one recurring
+     * job that re-enqueues the next run $intervalSeconds later — so run this
+     * ONCE. The only long-lived process you then need is the worker:
+     *
+     *   ./yii trading/schedule-hourly        # start the loop (default 3600s)
+     *   ./yii queue/listen --verbose=1       # worker that runs the jobs
+     */
+    public function actionScheduleHourly(int $intervalSeconds = 3600): int
+    {
+        $id = Yii::$app->queue->push(new ScanSignalsJob([
+            'recurring'       => true,
+            'intervalSeconds' => $intervalSeconds,
+            'source'          => 'schedule',
+        ]));
+        $this->stdout("started hourly scan loop (interval={$intervalSeconds}s, job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("Run the worker to process it: ./yii queue/listen --verbose=1\n");
+        $this->stdout("Run this command only once — each run re-enqueues itself.\n", Console::FG_YELLOW);
         return ExitCode::OK;
     }
 

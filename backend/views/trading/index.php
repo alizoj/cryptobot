@@ -103,6 +103,12 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             <?= $navBtn('Daily scan', ['scan-preview'], false) ?>
             <?= $navBtn('4h scan', ['scan4h-preview'], false) ?>
         </div>
+        <?= Html::beginForm(['scan-now'], 'post', ['class' => 'd-inline']) ?>
+            <?= Html::submitButton('⚡ Scan now', [
+                'class' => 'btn btn-sm btn-success',
+                'title' => 'Очередь: обновить цены и просканировать сигналы (daily + 4h)',
+            ]) ?>
+        <?= Html::endForm() ?>
         <?= Html::beginForm(['test-telegram'], 'post', ['class' => 'd-inline']) ?>
             <?= Html::submitButton('Test Telegram', ['class' => 'btn btn-sm btn-outline-primary']) ?>
         <?= Html::endForm() ?>
@@ -115,74 +121,45 @@ $navBtn = static function (string $label, array $route, bool $active): string {
         <?php endif; ?>
     <?php endforeach; ?>
 
-    <!-- Sizing settings -->
+    <!-- Account size (only editable knob) -->
     <?php
         $curEquity   = (float)($params['equityUsd']            ?? 10000);
         $curRiskPct  = (float)($params['riskPct']              ?? 0.005);
         $curMaxNotPc = (float)($params['maxNotionalPct']       ?? 0.20);
         $curMaxConc  = (int)  ($params['maxConcurrentSingles'] ?? 5);
-        $curTpl      = (string)($uiSettings['template']        ?? 'custom');
         $savedAt     = (string)($uiSettings['updated_at']      ?? '');
     ?>
     <div class="card card-section mb-3"><div class="card-body py-3">
         <?= Html::beginForm(['save-settings'], 'post', ['class' => 'row g-2 align-items-end']) ?>
             <div class="col-12 col-md-auto">
-                <div class="text-secondary small">Sizing</div>
-                <div class="fw-semibold">Account &amp; risk</div>
+                <div class="text-secondary small">Account</div>
+                <div class="fw-semibold">Equity</div>
                 <?php if ($savedAt !== ''): ?>
                     <div class="text-secondary small">saved <?= Html::encode($savedAt) ?> UTC</div>
                 <?php endif; ?>
             </div>
-            <div class="col-6 col-md-2">
+            <div class="col-6 col-md-3">
                 <label class="form-label small mb-1">Equity (USD)</label>
                 <div class="input-group input-group-sm">
                     <span class="input-group-text">$</span>
                     <?= Html::input('number', 'equityUsd', number_format($curEquity, 2, '.', ''),
-                        ['class' => 'form-control num', 'step' => '1', 'min' => '1']) ?>
+                        ['class' => 'form-control num', 'step' => '1', 'min' => '1', 'autofocus' => true]) ?>
                 </div>
-            </div>
-            <div class="col-6 col-md-2">
-                <label class="form-label small mb-1">Risk / trade</label>
-                <div class="input-group input-group-sm">
-                    <?= Html::input('number', 'riskPct', rtrim(rtrim(sprintf('%.4f', $curRiskPct * 100), '0'), '.'),
-                        ['class' => 'form-control num', 'step' => '0.05', 'min' => '0.01']) ?>
-                    <span class="input-group-text">%</span>
-                </div>
-            </div>
-            <div class="col-6 col-md-2">
-                <label class="form-label small mb-1">Max notional / trade</label>
-                <div class="input-group input-group-sm">
-                    <?= Html::input('number', 'maxNotionalPct', rtrim(rtrim(sprintf('%.2f', $curMaxNotPc * 100), '0'), '.'),
-                        ['class' => 'form-control num', 'step' => '1', 'min' => '1']) ?>
-                    <span class="input-group-text">%</span>
-                </div>
-            </div>
-            <div class="col-6 col-md-2">
-                <label class="form-label small mb-1" title="Auto-open cap: scans stop opening when this many positions are already open. Close one to free a slot.">Max positions</label>
-                <?= Html::input('number', 'maxConcurrentSingles', (string)$curMaxConc,
-                    ['class' => 'form-control form-control-sm num', 'step' => '1', 'min' => '1', 'max' => '50']) ?>
-            </div>
-            <div class="col-6 col-md-3">
-                <label class="form-label small mb-1">Template</label>
-                <?php
-                    $tplOptions = ['custom' => 'Custom (use values above)'];
-                    foreach ($uiTemplates as $key => $t) {
-                        $tplOptions[$key] = sprintf(
-                            '%s — %s%% risk · %s%% max',
-                            $t['label'],
-                            rtrim(rtrim(sprintf('%.3f', (float)$t['riskPct'] * 100), '0'), '.'),
-                            (int)round((float)$t['maxNotionalPct'] * 100),
-                        );
-                    }
-                ?>
-                <?= Html::dropDownList('template', $curTpl, $tplOptions, ['class' => 'form-select form-select-sm']) ?>
             </div>
             <div class="col-12 col-md-auto">
                 <?= Html::submitButton('Apply', ['class' => 'btn btn-sm btn-primary']) ?>
             </div>
             <div class="col-12">
+                <div class="text-secondary small d-flex flex-wrap gap-3 align-items-center pt-1">
+                    <span class="fw-semibold text-body">Locked to best setup:</span>
+                    <span>Risk/trade <span class="text-body num"><?= rtrim(rtrim(sprintf('%.3f', $curRiskPct * 100), '0'), '.') ?>%</span></span>
+                    <span>Max notional/trade <span class="text-body num"><?= rtrim(rtrim(sprintf('%.2f', $curMaxNotPc * 100), '0'), '.') ?>%</span></span>
+                    <span>Max positions <span class="text-body num"><?= $curMaxConc ?></span></span>
+                    <span>Exit <span class="text-body">T+<?= (int)($params['timeExitDays'] ?? 20) ?></span></span>
+                    <span>Funding <span class="text-body"><?= Html::encode((string)($params['fundingMode'] ?? 'mean')) ?></span></span>
+                </div>
                 <div class="text-secondary small">
-                    Picking a non-Custom template uses its preset Risk &amp; Max-notional (the matching inputs above are ignored). Equity and Max positions are always taken as-typed. Applies globally — next scan sizes signals at these settings; existing open positions keep their original sizing.
+                    Only Equity is adjustable — every other knob stays at the tuned Experiment-8 defaults (best setup for finding signals). Applies globally: the next scan sizes signals at this equity; existing open positions keep their original sizing.
                 </div>
             </div>
         <?= Html::endForm() ?>
@@ -242,7 +219,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
     <div class="card card-section mb-4"><div class="card-body py-2">
         <div class="d-flex flex-wrap gap-3 small text-secondary align-items-center">
             <span>Equity <span class="text-body num">$<?= number_format($equity, 0) ?></span></span>
-            <span>Risk/trade <span class="text-body num"><?= number_format((float)($params['riskPct'] ?? 0) * 100, 2) ?>%</span></span>
+            <span>Risk/trade <span class="text-body num"><?= number_format($curRiskPct * 100, 2) ?>%</span></span>
             <span>Exit <span class="text-body">T+<?= (int)($params['timeExitDays'] ?? 20) ?></span></span>
             <span>Funding <span class="text-body"><?= Html::encode((string)($params['fundingMode'] ?? 'mean')) ?></span></span>
             <span>S6 floor <span class="text-body num">$<?= number_format((float)($params['s6MinTurnover20dUsd'] ?? 1000000) / 1e6, 1) ?>M</span></span>

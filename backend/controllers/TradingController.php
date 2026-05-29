@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace backend\controllers;
 
+use common\jobs\ScanSignalsJob;
 use common\services\Trading\MarketData;
 use common\services\Trading\PositionStore;
 use common\services\Trading\SignalEngine;
@@ -43,6 +44,7 @@ final class TradingController extends Controller
                     'save-settings'  => ['post'],
                     'close-position' => ['post'],
                     'close-bulk'     => ['post'],
+                    'scan-now'       => ['post'],
                 ],
             ],
         ];
@@ -95,7 +97,25 @@ final class TradingController extends Controller
     {
         $patch = UiSettings::resolve(Yii::$app->request->post());
         UiSettings::save($patch);
-        Yii::$app->session->setFlash('success', 'Sizing settings saved.');
+        Yii::$app->session->setFlash('success', 'Equity saved.');
+        return $this->redirect(['index']);
+    }
+
+    /**
+     * One-click signal scan: push a job onto the queue (refresh prices →
+     * manage open positions → daily + 4h scan → send/open signals). A worker
+     * (`./yii queue/listen`) picks it up; the page returns immediately rather
+     * than blocking the request on the fetch + scan.
+     */
+    public function actionScanNow(): Response
+    {
+        try {
+            $id = Yii::$app->queue->push(new ScanSignalsJob(['source' => 'dashboard']));
+            Yii::$app->session->setFlash('success',
+                "Сканирование поставлено в очередь (job #{$id}). Новые сигналы появятся, как только их обработает воркер.");
+        } catch (\Throwable $e) {
+            Yii::$app->session->setFlash('error', 'Не удалось поставить задачу в очередь: ' . $e->getMessage());
+        }
         return $this->redirect(['index']);
     }
 
