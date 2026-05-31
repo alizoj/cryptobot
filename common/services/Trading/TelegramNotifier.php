@@ -199,6 +199,7 @@ final class TelegramNotifier
             'funding_invalid'  => "\u{26A0}\u{FE0F} FUNDING FLIP — EXIT NOW",
             'trail_update'     => "\u{1F504} STOP TRAIL UPDATE",
             'stop_hit'         => "\u{274C} STOP HIT",
+            'manual_close'     => "\u{1F464} MANUAL CLOSE",
             default            => "\u{2139}\u{FE0F} POSITION UPDATE",
         };
         $lines = [

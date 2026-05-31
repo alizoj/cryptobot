@@ -7,6 +7,7 @@ namespace backend\controllers;
 use common\jobs\ScanSignalsJob;
 use common\services\Trading\MarketData;
 use common\services\Trading\PositionStore;
+use common\services\Trading\ScanRunner;
 use common\services\Trading\SignalEngine;
 use common\services\Trading\TelegramNotifier;
 use common\services\Trading\UiSettings;
@@ -162,16 +163,25 @@ final class TradingController extends Controller
         $store->appendClosed($closing);
         $store->replaceOpen($remaining);
 
-        // Re-scan so a freed slot can be filled immediately.
-        $cap    = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        // Broadcast + log the manual close, then re-scan to fill the freed slot.
+        // Both go through ScanRunner so the dashboard path has the same side
+        // effects as the queue path (Telegram alert + signal_log entry).
+        $runner = new ScanRunner();
+        $runner->emitEvents([[
+            'kind'      => 'manual_close',
+            'symbol'    => $closing['symbol'],
+            'setup'     => $closing['setup'],
+            'side'      => $closing['side'] ?? '',
+            'entry_px'  => $closing['entry_px'],
+            'entry_day' => $closing['entry_day'] ?? '',
+            'exit_px'   => $exitPx,
+            'pnl_pct'   => $pnlPct,
+            'note'      => 'Closed manually from dashboard.',
+        ]], gmdate('Y-m-d'), false);
+
         $engine = new SignalEngine();
-        $opened = 0;
-        foreach ($engine->scan(null)['signals'] as $sig) {
-            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
-        }
-        foreach ($engine->scanIntraday(null)['signals'] as $sig) {
-            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
-        }
+        $opened = $runner->emitSignals($engine->scan(null)['signals'], false, null, onlyNotifyOpened: true)['opened']
+                + $runner->emitSignals($engine->scanIntraday(null)['signals'], false, null, onlyNotifyOpened: true)['opened'];
 
         Yii::$app->session->setFlash('success', sprintf(
             'Closed %s %s at %s (%+.2f%%). %d new position(s) opened from re-scan.',
@@ -213,6 +223,7 @@ final class TradingController extends Controller
             return $this->redirect(['index']);
         }
 
+        $events = [];
         foreach ($closing as $p) {
             $candles = $md->dailyCandles((string)$p['symbol']);
             $last    = $candles !== [] ? end($candles) : null;
@@ -229,18 +240,28 @@ final class TradingController extends Controller
                 'pnl_pct'     => $pnlPct,
             ];
             $store->appendClosed($p);
+            $events[] = [
+                'kind'      => 'manual_close',
+                'symbol'    => $p['symbol'],
+                'setup'     => $p['setup'],
+                'side'      => $p['side'] ?? '',
+                'entry_px'  => $p['entry_px'],
+                'entry_day' => $p['entry_day'] ?? '',
+                'exit_px'   => $exitPx,
+                'pnl_pct'   => $pnlPct,
+                'note'      => 'Closed manually from dashboard.',
+            ];
         }
         $store->replaceOpen($remaining);
 
-        $cap    = (int)(Yii::$app->params['trading']['maxConcurrentSingles'] ?? 5);
+        // Broadcast + log the manual closes and the re-scan through ScanRunner so
+        // the dashboard path matches the queue path (Telegram + signal_log).
+        $runner = new ScanRunner();
+        $runner->emitEvents($events, gmdate('Y-m-d'), false);
+
         $engine = new SignalEngine();
-        $opened = 0;
-        foreach ($engine->scan(null)['signals'] as $sig) {
-            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
-        }
-        foreach ($engine->scanIntraday(null)['signals'] as $sig) {
-            if ($store->openFromSignal($sig, $cap) === 'opened') $opened++;
-        }
+        $opened = $runner->emitSignals($engine->scan(null)['signals'], false, null, onlyNotifyOpened: true)['opened']
+                + $runner->emitSignals($engine->scanIntraday(null)['signals'], false, null, onlyNotifyOpened: true)['opened'];
 
         Yii::$app->session->setFlash('success', sprintf(
             'Closed %d position(s). %d new position(s) opened from re-scan.',
