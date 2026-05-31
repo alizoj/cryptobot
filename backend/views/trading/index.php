@@ -237,7 +237,16 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                     onclick="return confirm('Close ' + (document.getElementById('bulk-count').textContent || '0') + ' selected position(s) and re-scan?')">
                 Close selected (<span id="bulk-count">0</span>)
             </button>
-            <span class="small text-secondary">— or use the header checkbox to select all.</span>
+            <?= Html::beginForm(['close-all'], 'post', ['class' => 'd-inline']) ?>
+                <?= Html::submitButton('Close all (' . count($open) . ')', [
+                    'class' => 'btn btn-sm btn-danger',
+                    'data-confirm' => sprintf(
+                        'Close ALL %d open position(s) at the latest close, then re-scan for fresh entries?',
+                        count($open),
+                    ),
+                ]) ?>
+            <?= Html::endForm() ?>
+            <span class="small text-secondary">— or use the header checkbox to select some.</span>
         </div>
         <div class="card card-section"><div class="table-responsive">
             <table class="table tr-table align-middle" id="open-positions-table">

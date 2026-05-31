@@ -45,6 +45,7 @@ final class TradingController extends Controller
                     'save-settings'  => ['post'],
                     'close-position' => ['post'],
                     'close-bulk'     => ['post'],
+                    'close-all'      => ['post'],
                     'scan-now'       => ['post'],
                 ],
             ],
@@ -206,7 +207,6 @@ final class TradingController extends Controller
         }
 
         $store = new PositionStore();
-        $md    = new MarketData();
         $idSet = array_flip($ids);
 
         $closing   = [];
@@ -223,6 +223,51 @@ final class TradingController extends Controller
             return $this->redirect(['index']);
         }
 
+        $opened = $this->closeAndRescan($store, $closing, $remaining);
+
+        Yii::$app->session->setFlash('success', sprintf(
+            'Closed %d position(s). %d new position(s) opened from re-scan.',
+            count($closing), $opened,
+        ));
+        return $this->redirect(['index']);
+    }
+
+    /**
+     * Close every open position in one click, then run daily + 4h scans so a
+     * fresh set of entries can fill the now-empty book up to
+     * `maxConcurrentSingles`. Same close semantics as actionCloseBulk.
+     */
+    public function actionCloseAll(): Response
+    {
+        $store = new PositionStore();
+        $open  = $store->openPositions();
+        if ($open === []) {
+            Yii::$app->session->setFlash('error', 'No open positions to close.');
+            return $this->redirect(['index']);
+        }
+
+        $opened = $this->closeAndRescan($store, $open, []);
+
+        Yii::$app->session->setFlash('success', sprintf(
+            'Closed all %d position(s). %d new position(s) opened from re-scan.',
+            count($open), $opened,
+        ));
+        return $this->redirect(['index']);
+    }
+
+    /**
+     * Close $closing (mark each 'manual_close' with P&L vs the latest daily
+     * close, append to the closed journal), persist $remaining as the new open
+     * list, then broadcast the closes and re-scan daily + 4h through ScanRunner
+     * so the dashboard path matches the queue path (Telegram + signal_log).
+     *
+     * @param list<array<string,mixed>> $closing
+     * @param list<array<string,mixed>> $remaining
+     * @return int number of new positions opened by the re-scan
+     */
+    private function closeAndRescan(PositionStore $store, array $closing, array $remaining): int
+    {
+        $md     = new MarketData();
         $events = [];
         foreach ($closing as $p) {
             $candles = $md->dailyCandles((string)$p['symbol']);
@@ -254,20 +299,12 @@ final class TradingController extends Controller
         }
         $store->replaceOpen($remaining);
 
-        // Broadcast + log the manual closes and the re-scan through ScanRunner so
-        // the dashboard path matches the queue path (Telegram + signal_log).
         $runner = new ScanRunner();
         $runner->emitEvents($events, gmdate('Y-m-d'), false);
 
         $engine = new SignalEngine();
-        $opened = $runner->emitSignals($engine->scan(null)['signals'], false, null, onlyNotifyOpened: true)['opened']
-                + $runner->emitSignals($engine->scanIntraday(null)['signals'], false, null, onlyNotifyOpened: true)['opened'];
-
-        Yii::$app->session->setFlash('success', sprintf(
-            'Closed %d position(s). %d new position(s) opened from re-scan.',
-            count($closing), $opened,
-        ));
-        return $this->redirect(['index']);
+        return $runner->emitSignals($engine->scan(null)['signals'], false, null, onlyNotifyOpened: true)['opened']
+             + $runner->emitSignals($engine->scanIntraday(null)['signals'], false, null, onlyNotifyOpened: true)['opened'];
     }
 
     public function actionScanPreview(?string $asOf = null): string

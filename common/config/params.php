@@ -35,7 +35,7 @@ return [
         'aggressiveRiskPct'     => 0.0075,  // 0.75% per TRADE.md §3 (size-up triggers)
         'maxNotionalPct'        => 0.20,    // 20% of equity cap
         'maxPortfolioNotionalPct' => 0.60,  // 60% open notional cap
-        'maxConcurrentSingles'  => 5,
+        'maxConcurrentSingles'  => 10,
         'slippageBpsRoundTrip'  => 15,      // 0.15% expected, baked into PnL estimate
 
         // ---- exit / lifecycle (Experiment 8) ----
