@@ -56,8 +56,8 @@ return [
         // (backtest: 92.5% win / PF 3.64 on the full universe vs 2 fills at $5M).
         // Wide stops + risk-based sizing keep notional small. Intraday scan only.
         's6MinTurnover20dUsd'   => 1_000_000,
-        'blacklist'             => ['XAU', 'USTC', 'WLFI', 'LINEA', '1INCH', 'ACE', 'ACH'],
-        'memecoinPriceOnly'     => ['PEPE', 'BONK', 'SHIB', 'FLOKI', 'RATS'],
+        'blacklist'             => [],
+        'memecoinPriceOnly'     => [],
 
         // ---- DORMANT setups (won't fire even if data matches) ----
         // S1 + S2 re-enabled to broaden short coverage (TRADE/SIMULATION_RESULT_*
