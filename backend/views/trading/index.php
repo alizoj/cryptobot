@@ -11,6 +11,7 @@ declare(strict_types=1);
 /** @var float $unrealisedUsd */
 /** @var array<string, mixed> $uiSettings */
 /** @var array<string, array<string, mixed>> $uiTemplates */
+/** @var bool $canManage */
 
 use yii\helpers\Html;
 
@@ -104,15 +105,19 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             <?= $navBtn('Daily scan', ['scan-preview'], false) ?>
             <?= $navBtn('4h scan', ['scan4h-preview'], false) ?>
         </div>
-        <?= Html::beginForm(['scan-now'], 'post', ['class' => 'd-inline']) ?>
-            <?= Html::submitButton('⚡ Scan now', [
-                'class' => 'btn btn-sm btn-success',
-                'title' => 'Очередь: обновить цены и просканировать сигналы (daily + 4h)',
-            ]) ?>
-        <?= Html::endForm() ?>
-        <?= Html::beginForm(['test-telegram'], 'post', ['class' => 'd-inline']) ?>
-            <?= Html::submitButton('Test Telegram', ['class' => 'btn btn-sm btn-outline-primary']) ?>
-        <?= Html::endForm() ?>
+        <?php if ($canManage): ?>
+            <?= Html::beginForm(['scan-now'], 'post', ['class' => 'd-inline']) ?>
+                <?= Html::submitButton('⚡ Scan now', [
+                    'class' => 'btn btn-sm btn-success',
+                    'title' => 'Очередь: обновить цены и просканировать сигналы (daily + 4h)',
+                ]) ?>
+            <?= Html::endForm() ?>
+            <?= Html::beginForm(['test-telegram'], 'post', ['class' => 'd-inline']) ?>
+                <?= Html::submitButton('Test Telegram', ['class' => 'btn btn-sm btn-outline-primary']) ?>
+            <?= Html::endForm() ?>
+        <?php else: ?>
+            <span class="badge bg-secondary-subtle text-secondary-emphasis align-self-center" title="Read-only account — actions are disabled">👁 View-only</span>
+        <?php endif; ?>
         <?= Html::a('↻', ['index'], ['class' => 'btn btn-sm btn-outline-secondary', 'title' => 'Refresh']) ?>
     </div>
 
@@ -144,12 +149,14 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                 <div class="input-group input-group-sm">
                     <span class="input-group-text">$</span>
                     <?= Html::input('number', 'equityUsd', number_format($curEquity, 2, '.', ''),
-                        ['class' => 'form-control num', 'step' => '1', 'min' => '1', 'autofocus' => true]) ?>
+                        ['class' => 'form-control num', 'step' => '1', 'min' => '1', 'autofocus' => $canManage, 'disabled' => !$canManage]) ?>
                 </div>
             </div>
+            <?php if ($canManage): ?>
             <div class="col-12 col-md-auto">
                 <?= Html::submitButton('Apply', ['class' => 'btn btn-sm btn-primary']) ?>
             </div>
+            <?php endif; ?>
             <div class="col-12">
                 <div class="text-secondary small d-flex flex-wrap gap-3 align-items-center pt-1">
                     <span class="fw-semibold text-body">Locked to best setup:</span>
@@ -232,6 +239,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
     <?php if (empty($open)): ?>
         <div class="card card-section"><div class="card-body text-secondary">No open positions.</div></div>
     <?php else: ?>
+        <?php if ($canManage): ?>
         <?= Html::beginForm(['close-bulk'], 'post', ['id' => 'bulkForm', 'class' => 'd-inline']) ?><?= Html::endForm() ?>
         <div class="d-flex align-items-center gap-2 mb-2">
             <button type="submit" form="bulkForm" class="btn btn-sm btn-outline-danger" id="bulk-close-btn" disabled
@@ -249,10 +257,11 @@ $navBtn = static function (string $label, array $route, bool $active): string {
             <?= Html::endForm() ?>
             <span class="small text-secondary">— or use the header checkbox to select some.</span>
         </div>
+        <?php endif; ?>
         <div class="card card-section"><div class="table-responsive">
             <table class="table tr-table align-middle" id="open-positions-table">
                 <thead><tr>
-                    <th style="width:32px"><input type="checkbox" class="form-check-input" id="bulk-master" title="Select all"></th>
+                    <?php if ($canManage): ?><th style="width:32px"><input type="checkbox" class="form-check-input" id="bulk-master" title="Select all"></th><?php endif; ?>
                     <th>Opened</th><th>Symbol</th><th>Setup</th><th>Side</th>
                     <th class="text-end">Entry</th><th class="text-end">Stop</th>
                     <th class="text-end">Last</th>
@@ -263,7 +272,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                 <tbody>
                 <?php foreach ($open as $p): $side = $p['side'] ?? ''; ?>
                     <tr class="row-<?= $side === 'short' ? 'short' : 'long' ?>">
-                        <td><input type="checkbox" class="form-check-input bulk-check" name="ids[]" value="<?= Html::encode((string)($p['id'] ?? '')) ?>" form="bulkForm"></td>
+                        <?php if ($canManage): ?><td><input type="checkbox" class="form-check-input bulk-check" name="ids[]" value="<?= Html::encode((string)($p['id'] ?? '')) ?>" form="bulkForm"></td><?php endif; ?>
                         <td class="small text-secondary"><?= Html::encode($p['entry_day'] ?? '') ?></td>
                         <td><strong><?= Html::encode($p['symbol'] ?? '') ?></strong></td>
                         <td><?= $setupBadge($p['setup'] ?? null) ?></td>
@@ -278,6 +287,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                         <td class="text-end"><?= $pnlUsdCell($p['pnl_usd'] ?? null) ?></td>
                         <td class="text-end">
                             <?= $chartLink($p['symbol'] ?? null, $p['entry_px'] ?? null, $p['stop_px'] ?? null, $side, $p['setup'] ?? null, $p['entry_day'] ?? null) ?>
+                            <?php if ($canManage): ?>
                             <?= Html::beginForm(['close-position'], 'post', ['style' => 'display:inline; margin-left:6px']) ?>
                                 <?= Html::hiddenInput('id', (string)($p['id'] ?? '')) ?>
                                 <?= Html::submitButton('Close', [
@@ -289,6 +299,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
                                     ),
                                 ]) ?>
                             <?= Html::endForm() ?>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 <?php endforeach; ?>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace backend\controllers;
 
 use common\jobs\ScanSignalsJob;
+use common\models\User;
 use common\services\Trading\CoinMetrics;
 use common\services\Trading\MarketData;
 use common\services\Trading\PositionStore;
@@ -36,6 +37,15 @@ final class TradingController extends Controller
             'access' => [
                 'class' => AccessControl::class,
                 'rules' => [
+                    // Mutating actions are admin-only. For a guest the callback
+                    // returns true → this deny rule fires (403); for an admin it
+                    // returns false → the rule is skipped and the @ rule allows.
+                    [
+                        'allow' => false,
+                        'actions' => ['save-settings', 'scan-now', 'close-position', 'close-bulk', 'close-all', 'test-telegram'],
+                        'matchCallback' => static fn(): bool => !User::currentCanManage(),
+                    ],
+                    // Everything else (dashboard, RSI, scans, chart) — any login.
                     ['allow' => true, 'roles' => ['@']],
                 ],
             ],
@@ -93,6 +103,7 @@ final class TradingController extends Controller
             'unrealisedUsd' => $unrealisedUsd,
             'uiSettings'    => UiSettings::load(),
             'uiTemplates'   => UiSettings::TEMPLATES,
+            'canManage'     => User::currentCanManage(),
         ]);
     }
 

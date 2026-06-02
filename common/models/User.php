@@ -21,6 +21,7 @@ use yii\web\IdentityInterface;
  * @property string $email
  * @property string $auth_key
  * @property int $status
+ * @property string $role
  * @property int $created_at
  * @property int $updated_at
  * @property string $password write-only password
@@ -30,6 +31,11 @@ class User extends ActiveRecord implements IdentityInterface
     public const STATUS_DELETED = 0;
     public const STATUS_INACTIVE = 9;
     public const STATUS_ACTIVE = 10;
+
+    /** Full access (mutating actions allowed). */
+    public const ROLE_ADMIN = 'admin';
+    /** View-only access (mutating actions blocked). */
+    public const ROLE_GUEST = 'guest';
     /**
      * {@inheritdoc}
      */
@@ -56,7 +62,22 @@ class User extends ActiveRecord implements IdentityInterface
         return [
             ['status', 'default', 'value' => self::STATUS_INACTIVE],
             ['status', 'in', 'range' => [self::STATUS_ACTIVE, self::STATUS_INACTIVE, self::STATUS_DELETED]],
+            ['role', 'default', 'value' => self::ROLE_GUEST],
+            ['role', 'in', 'range' => [self::ROLE_ADMIN, self::ROLE_GUEST]],
         ];
+    }
+
+    /** True for accounts allowed to perform mutating actions (admin). */
+    public function isManager(): bool
+    {
+        return $this->role === self::ROLE_ADMIN;
+    }
+
+    /** Whether the currently logged-in user (if any) may perform mutations. */
+    public static function currentCanManage(): bool
+    {
+        $identity = Yii::$app->user->identity ?? null;
+        return $identity instanceof self && $identity->isManager();
     }
 
     /**
