@@ -9,8 +9,9 @@ namespace common\services\Trading\Fetcher;
  * fetcher (to discover the correct trading pair for a HashHedge ticker)
  * and the derivatives fetcher (to resolve the linear perp for funding/OI).
  *
- * Extracted from fetch_bybit_data.php::fetch_instruments_index() and
- * resolve_bybit_pair() / resolve_linear_pair().
+ * Resolves the spot trading pair and the linear perp for a HashHedge ticker
+ * (formerly the procedural fetch_instruments_index() / resolve_bybit_pair() /
+ * resolve_linear_pair()).
  */
 final class InstrumentsIndex
 {

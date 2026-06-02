@@ -1,8 +1,13 @@
 {
-  "_comment": "HashHedge ticker -> Bybit spot symbol override. Most HashHedge tickers are {SYMBOL}USDT on Bybit by default; this file only lists cases where that's wrong. The script auto-falls-back to USDT perpetual (category=linear) if no spot pair exists.",
+  "_comment": "HashHedge ticker -> Bybit symbol override (used for BOTH spot-price and linear-perp resolution). Most HashHedge tickers are {SYMBOL}USDT on Bybit by default; this file only lists cases where that's wrong. The high-supply memecoins below resolve to their 1000x linear perp, so both price and funding/OI come from the perp — harmless because the strategy is scale-invariant (RSI/returns/ATR are all ratio-based), and the perp is the only tradeable instrument for these anyway.",
 
   "XAU": "XAUTUSDT",
   "LINEA": "LINEAUSDT",
   "WLFI": "WLFIUSDT",
-  "ASTER": "ASTERUSDT"
+  "ASTER": "ASTERUSDT",
+
+  "PEPE": "1000PEPEUSDT",
+  "BONK": "1000BONKUSDT",
+  "FLOKI": "1000FLOKIUSDT",
+  "SHIB": "SHIB1000USDT"
 }

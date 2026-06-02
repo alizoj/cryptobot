@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace backend\controllers;
 
 use common\jobs\ScanSignalsJob;
+use common\services\Trading\CoinMetrics;
 use common\services\Trading\MarketData;
 use common\services\Trading\PositionStore;
 use common\services\Trading\ScanRunner;
@@ -334,6 +335,139 @@ final class TradingController extends Controller
             'diagnostics' => $result['diagnostics'],
             'intraday'    => true,
         ]);
+    }
+
+    /**
+     * Coin listing with multi-timeframe aggregated RSI — a Bybit-only revival of
+     * the rsi-module heatmap. Each coin shows Wilder RSI(14) on 1h/4h/1d/1w plus
+     * a weight-blended "aggregated" RSI (longer TFs weighted higher). The board
+     * is cached to runtime so the page is snappy; ?refresh=1 forces a recompute.
+     *
+     *   /trading/rsi
+     *   /trading/rsi?sort=1h&dir=desc
+     *   /trading/rsi?refresh=1
+     */
+    public function actionRsi(string $sort = 'agg', string $dir = 'asc', int $refresh = 0): string
+    {
+        $board = $this->rsiBoard((bool)$refresh);
+        $rows  = $board['rows'];
+
+        $allowed = ['symbol', 'price', 'chg24h', 'agg', '1h', '4h', '1d', '1w', 'turnover20'];
+        if (!in_array($sort, $allowed, true)) {
+            $sort = 'agg';
+        }
+        $mul = $dir === 'desc' ? -1 : 1;
+        $val = static fn(array $r) => in_array($sort, ['1h', '4h', '1d', '1w'], true) ? ($r['rsi'][$sort] ?? null) : ($r[$sort] ?? null);
+        usort($rows, static function (array $a, array $b) use ($val, $mul, $sort): int {
+            $va = $val($a);
+            $vb = $val($b);
+            if ($va === null && $vb === null) return 0;
+            if ($va === null) return 1;   // nulls always last
+            if ($vb === null) return -1;
+            return $mul * ($sort === 'symbol' ? strcmp((string)$va, (string)$vb) : ($va <=> $vb));
+        });
+
+        return $this->render('rsi', [
+            'rows'    => $rows,
+            'updated' => $board['updated'],
+            'sort'    => $sort,
+            'dir'     => $dir,
+            'tfs'     => self::RSI_TFS,
+        ]);
+    }
+
+    /** Timeframe label => aggregation weight (longer TF = more weight). */
+    private const RSI_TFS = ['1h' => 1.0, '4h' => 1.6, '1d' => 2.4, '1w' => 3.0];
+
+    /**
+     * Build (or load from a 15-min runtime cache) the per-coin RSI board over
+     * the whole fetched universe. Returns ['updated'=>int ts, 'rows'=>list].
+     *
+     * @return array{updated:int, rows:list<array<string,mixed>>}
+     */
+    private function rsiBoard(bool $force): array
+    {
+        $cacheFile = Yii::getAlias('@runtime') . '/rsi_board.json';
+        $ttl = 900;
+        if (!$force && is_file($cacheFile)) {
+            $cached = json_decode((string)file_get_contents($cacheFile), true);
+            if (is_array($cached) && (time() - (int)($cached['updated'] ?? 0)) < $ttl) {
+                return $cached;
+            }
+        }
+
+        @set_time_limit(180);
+        $md = new MarketData();
+        $rows = [];
+        foreach ($md->listSymbols() as $sym) {
+            $daily = $md->dailyCandles($sym);
+            if (count($daily) < 15) {
+                $md->forgetSymbol();
+                continue;
+            }
+            $rsi = [
+                '1h' => self::rsiOf($md->hourlyCandles($sym)),
+                '4h' => self::rsiOf($md->fourHourCandles($sym)),
+                '1d' => self::rsiOf($daily),
+                '1w' => self::rsiOf($md->weeklyCandles($sym)),
+            ];
+            $acc = 0.0;
+            $wsum = 0.0;
+            foreach (self::RSI_TFS as $tf => $w) {
+                if (is_numeric($rsi[$tf])) {
+                    $acc += $w * $rsi[$tf];
+                    $wsum += $w;
+                }
+            }
+            $agg = $wsum > 0 ? $acc / $wsum : null;
+
+            $last  = end($daily);
+            $prev  = $daily[count($daily) - 2] ?? null;
+            $price = (float)$last['c'];
+            $chg   = ($prev !== null && (float)$prev['c'] > 0) ? ($price / (float)$prev['c'] - 1) * 100 : null;
+            $turn20 = self::turnover20($daily);
+
+            $rows[] = [
+                'symbol'     => $sym,
+                'price'      => $price,
+                'chg24h'     => $chg,
+                'turnover20' => $turn20,
+                'tradeable'  => $turn20 !== null && $turn20 >= 5_000_000,
+                'rsi'        => $rsi,
+                'agg'        => $agg !== null ? round($agg, 1) : null,
+            ];
+            $md->forgetSymbol();
+        }
+
+        $out = ['updated' => time(), 'rows' => $rows];
+        @file_put_contents($cacheFile, json_encode($out));
+        return $out;
+    }
+
+    /** Wilder RSI(14) of the last ~250 closes of an OHLCV series, or null. */
+    private static function rsiOf(array $candles): ?float
+    {
+        if (count($candles) < 15) {
+            return null;
+        }
+        $closes = array_column(array_slice($candles, -250), 'c');
+        $r = CoinMetrics::calcRSI($closes);
+        return $r !== null ? round($r, 1) : null;
+    }
+
+    /** 20-day average daily turnover (close × volume), matching Features. */
+    private static function turnover20(array $daily): ?float
+    {
+        $n = count($daily);
+        if ($n < 1) {
+            return null;
+        }
+        $w = min(20, $n);
+        $sum = 0.0;
+        foreach (array_slice($daily, -$w) as $c) {
+            $sum += (float)$c['c'] * (float)$c['v'];
+        }
+        return $sum / $w;
     }
 
     /**

@@ -81,26 +81,32 @@ final class MtfContext
             }
         }
 
-        // ---- 4h: last completed bar + RSI ----
+        // ---- 4h: last completed bar + RSI (+ slope) ----
         $h4   = $md->fourHourCandles($symbol);
+        $h4c  = array_column($h4, 'c');
         $h4i  = self::lastCompletedIdx($h4, $dayCloseTs, self::H4_MS);
-        $h4_rsi  = self::rsiAt(array_column($h4, 'c'), $h4i, 14);
-        $h4_last = self::barFeatures($h4, $h4i);
+        $h4_rsi   = self::rsiAt($h4c, $h4i, 14);
+        $h4_slope = self::rsiSlopeAt($h4c, $h4i, 14);
+        $h4_last  = self::barFeatures($h4, $h4i);
 
-        // ---- 1h: RSI of last completed bar ----
+        // ---- 1h: RSI of last completed bar (+ slope) ----
         $h1  = $md->hourlyCandles($symbol);
+        $h1c = array_column($h1, 'c');
         $h1i = self::lastCompletedIdx($h1, $dayCloseTs, self::H1_MS);
-        $h1_rsi = self::rsiAt(array_column($h1, 'c'), $h1i, 14);
+        $h1_rsi   = self::rsiAt($h1c, $h1i, 14);
+        $h1_slope = self::rsiSlopeAt($h1c, $h1i, 14);
 
         return [
-            'w_up'    => $w_up,
-            'w_down'  => $w_down,
-            'd_up'    => $d_up,
-            'd_down'  => $d_down,
-            'd_low3'  => $d_low3,
-            'h4_rsi'  => $h4_rsi,
-            'h1_rsi'  => $h1_rsi,
-            'h4_last' => $h4_last,
+            'w_up'          => $w_up,
+            'w_down'        => $w_down,
+            'd_up'          => $d_up,
+            'd_down'        => $d_down,
+            'd_low3'        => $d_low3,
+            'h4_rsi'        => $h4_rsi,
+            'h4_rsi_slope'  => $h4_slope,
+            'h1_rsi'        => $h1_rsi,
+            'h1_rsi_slope'  => $h1_slope,
+            'h4_last'       => $h4_last,
         ];
     }
 
@@ -171,29 +177,35 @@ final class MtfContext
 
         // 4h: last completed bar at $asOfMs
         $h4  = $md->fourHourCandles($symbol);
+        $h4c = array_column($h4, 'c');
         $h4i = self::lastCompletedIdx($h4, $asOfMs, self::H4_MS);
         if ($h4i < 1) {
             return null;
         }
-        $h4_rsi  = self::rsiAt(array_column($h4, 'c'), $h4i, 14);
-        $h4_last = self::barFeatures($h4, $h4i);
+        $h4_rsi   = self::rsiAt($h4c, $h4i, 14);
+        $h4_slope = self::rsiSlopeAt($h4c, $h4i, 14);
+        $h4_last  = self::barFeatures($h4, $h4i);
 
         // 1h: last completed bar at $asOfMs
         $h1  = $md->hourlyCandles($symbol);
+        $h1c = array_column($h1, 'c');
         $h1i = self::lastCompletedIdx($h1, $asOfMs, self::H1_MS);
-        $h1_rsi = self::rsiAt(array_column($h1, 'c'), $h1i, 14);
+        $h1_rsi   = self::rsiAt($h1c, $h1i, 14);
+        $h1_slope = self::rsiSlopeAt($h1c, $h1i, 14);
 
         return [
-            'w_up'      => $w_up,
-            'w_down'    => $w_down,
-            'd_up'      => $d_up,
-            'd_down'    => $d_down,
-            'd_low3'    => $d_low3,
-            'h4_rsi'    => $h4_rsi,
-            'h1_rsi'    => $h1_rsi,
-            'h4_last'   => $h4_last,
-            'ref_close' => (float)$h4[$h4i]['c'],
-            'ref_ts'    => (int)$h4[$h4i]['ts'] + self::H4_MS,
+            'w_up'          => $w_up,
+            'w_down'        => $w_down,
+            'd_up'          => $d_up,
+            'd_down'        => $d_down,
+            'd_low3'        => $d_low3,
+            'h4_rsi'        => $h4_rsi,
+            'h4_rsi_slope'  => $h4_slope,
+            'h1_rsi'        => $h1_rsi,
+            'h1_rsi_slope'  => $h1_slope,
+            'h4_last'       => $h4_last,
+            'ref_close'     => (float)$h4[$h4i]['c'],
+            'ref_ts'        => (int)$h4[$h4i]['ts'] + self::H4_MS,
         ];
     }
 
@@ -219,6 +231,21 @@ final class MtfContext
         $ret = $p['c'] > 0 ? $b['c'] / $p['c'] - 1 : 0.0;
         $uw  = $b['c'] > 0 ? ($b['h'] - max($b['o'], $b['c'])) / $b['c'] : 0.0;
         return ['ret' => $ret, 'upper_wick' => $uw, 'high' => (float)$b['h']];
+    }
+
+    /**
+     * RSI velocity: RSI(end) − RSI(end−1) over $closes, or null if either point
+     * is unavailable. Positive = RSI rising, negative = RSI falling. Used by the
+     * TrapGate "wait-for-the-turn" confirmation.
+     */
+    private static function rsiSlopeAt(array $closes, int $end, int $p = 14): ?float
+    {
+        $cur  = self::rsiAt($closes, $end, $p);
+        $prev = self::rsiAt($closes, $end - 1, $p);
+        if ($cur === null || $prev === null) {
+            return null;
+        }
+        return $cur - $prev;
     }
 
     /** Simple-average RSI(14) at index $end over $closes (matches the analysis script). */

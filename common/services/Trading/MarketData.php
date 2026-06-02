@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace common\services\Trading;
 
 /**
- * Loaders for the per-symbol JSON files produced by fetch_bybit_data.php
- * and fetch_bybit_derivatives.php, plus the macro JSONL files.
+ * Loaders for the per-symbol JSON files produced by the Fetcher\BybitPriceFetcher
+ * and Fetcher\BybitDerivativesFetcher, plus the macro JSONL files.
  *
  * Pulled out of the simulator into a class so SignalEngine can hold one
  * instance and avoid re-decoding files between symbols.
@@ -20,6 +20,19 @@ final class MarketData
      */
     private ?string $cachedSymbol = null;
     private ?array $cachedRecord = null;
+
+    /**
+     * Derived OHLCV arrays per interval for the currently-cached symbol. The
+     * raw record holds candles as positional tuples; building the keyed arrays
+     * is the hot cost when a caller hits the same symbol repeatedly (the live
+     * scan re-derives daily candles 3–4× per symbol; the gate backtester calls
+     * the 4h/1h/weekly accessors once per historical row). Invalidated whenever
+     * the cached symbol changes.
+     *
+     * @var array<string, list<array<string,float|int>>>
+     */
+    private array $candleCache = [];
+    private ?string $candleSymbol = null;
 
     /** @var array<string, array<string,int>>|null */
     private ?array $fng = null;
@@ -49,6 +62,40 @@ final class MarketData
     {
         $this->cachedSymbol = null;
         $this->cachedRecord = null;
+        $this->candleCache = [];
+        $this->candleSymbol = null;
+    }
+
+    /**
+     * Memoized per-symbol builder for one interval's OHLCV rows. Volume ('v')
+     * is carried on every interval — CoinMetrics needs 1h/4h volume for its
+     * volume-profile / OBV / volRatio metrics, and the extra float is cheap.
+     *
+     * @return list<array<string,float|int>>
+     */
+    private function intervalCandles(string $symbol, string $interval): array
+    {
+        if ($this->candleSymbol !== $symbol) {
+            $this->candleSymbol = $symbol;
+            $this->candleCache = [];
+        }
+        if (isset($this->candleCache[$interval])) {
+            return $this->candleCache[$interval];
+        }
+        $rec = $this->loadSymbol($symbol);
+        $rows = $rec['history']['intervals'][$interval]['rows'] ?? [];
+        $out = [];
+        foreach ($rows as $r) {
+            $out[] = [
+                'ts' => (int)$r[0],
+                'o'  => (float)$r[1],
+                'h'  => (float)$r[2],
+                'l'  => (float)$r[3],
+                'c'  => (float)$r[4],
+                'v'  => (float)($r[5] ?? 0.0),
+            ];
+        }
+        return $this->candleCache[$interval] = $out;
     }
 
     /** @return list<string> symbol tickers excluding leading-underscore index files */
@@ -69,86 +116,25 @@ final class MarketData
     /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> */
     public function dailyCandles(string $symbol): array
     {
-        $rec = $this->loadSymbol($symbol);
-        if (!$rec) {
-            return [];
-        }
-        $rows = $rec['history']['intervals']['D']['rows'] ?? [];
-        $out = [];
-        foreach ($rows as $r) {
-            $out[] = [
-                'ts' => (int)$r[0],
-                'o'  => (float)$r[1],
-                'h'  => (float)$r[2],
-                'l'  => (float)$r[3],
-                'c'  => (float)$r[4],
-                'v'  => (float)$r[5],
-            ];
-        }
-        return $out;
+        return $this->intervalCandles($symbol, 'D');
     }
 
-    /** @return list<array{ts:int,o:float,h:float,l:float,c:float}> */
+    /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> */
     public function hourlyCandles(string $symbol): array
     {
-        $rec = $this->loadSymbol($symbol);
-        if (!$rec) {
-            return [];
-        }
-        $rows = $rec['history']['intervals']['1h']['rows'] ?? [];
-        $out = [];
-        foreach ($rows as $r) {
-            $out[] = [
-                'ts' => (int)$r[0],
-                'o'  => (float)$r[1],
-                'h'  => (float)$r[2],
-                'l'  => (float)$r[3],
-                'c'  => (float)$r[4],
-            ];
-        }
-        return $out;
+        return $this->intervalCandles($symbol, '1h');
     }
 
-    /** @return list<array{ts:int,o:float,h:float,l:float,c:float}> */
+    /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> */
     public function fourHourCandles(string $symbol): array
     {
-        $rec = $this->loadSymbol($symbol);
-        if (!$rec) {
-            return [];
-        }
-        $rows = $rec['history']['intervals']['4h']['rows'] ?? [];
-        $out = [];
-        foreach ($rows as $r) {
-            $out[] = [
-                'ts' => (int)$r[0],
-                'o'  => (float)$r[1],
-                'h'  => (float)$r[2],
-                'l'  => (float)$r[3],
-                'c'  => (float)$r[4],
-            ];
-        }
-        return $out;
+        return $this->intervalCandles($symbol, '4h');
     }
 
-    /** @return list<array{ts:int,o:float,h:float,l:float,c:float}> weekly (interval W) */
+    /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> weekly (interval W) */
     public function weeklyCandles(string $symbol): array
     {
-        $rec = $this->loadSymbol($symbol);
-        if (!$rec) {
-            return [];
-        }
-        $rows = $rec['history']['intervals']['W']['rows'] ?? [];
-        $out = [];
-        foreach ($rows as $r) {
-            $out[] = [
-                'ts' => (int)$r[0],
-                'o'  => (float)$r[1],
-                'h'  => (float)$r[2],
-                'l'  => (float)$r[3],
-                'c'  => (float)$r[4],
-            ];
-        }
-        return $out;
+        return $this->intervalCandles($symbol, 'W');
     }
 
     public function hasDerivatives(string $symbol): bool

@@ -100,6 +100,7 @@ $navBtn = static function (string $label, array $route, bool $active): string {
         </div>
         <div class="btn-group" role="group" aria-label="views">
             <?= $navBtn('Dashboard', ['index'], true) ?>
+            <?= $navBtn('RSI heatmap', ['rsi'], false) ?>
             <?= $navBtn('Daily scan', ['scan-preview'], false) ?>
             <?= $navBtn('4h scan', ['scan4h-preview'], false) ?>
         </div>

@@ -19,6 +19,7 @@ $items = [
         'visible' => !Yii::$app->user->isGuest,
         'items' => [
             ['label' => 'Dashboard', 'url' => ['/trading/index']],
+            ['label' => 'RSI heatmap', 'url' => ['/trading/rsi']],
             ['label' => 'Daily scan', 'url' => ['/trading/scan-preview']],
             ['label' => '4h scan', 'url' => ['/trading/scan4h-preview']],
             ['label' => 'Symbol chart', 'url' => ['/trading/chart', 'symbol' => 'BTC']],

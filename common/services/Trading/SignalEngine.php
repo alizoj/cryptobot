@@ -68,6 +68,7 @@ final class SignalEngine
 
         $signals     = [];
         $skipReasons = [];
+        $trapVetoes  = [];
         $scanned     = 0;
         $noFeatureRow = 0;
 
@@ -119,6 +120,13 @@ final class SignalEngine
                 }
                 // Cluster filter — L1 always allowed (Exp 9), others gated.
                 if ($clusterTriggered && $fire['setup'] !== 'L1') {
+                    continue;
+                }
+
+                // Wait-for-the-turn veto (rsi-module detectTraps port). No-op
+                // unless trading.requireTurnConfirmation is enabled.
+                if (TrapGate::veto($fire, $ctx['mtf'] ?? [], (float)$today['ret'], $this->cfg) !== null) {
+                    $trapVetoes[$fire['setup']] = ($trapVetoes[$fire['setup']] ?? 0) + 1;
                     continue;
                 }
 
@@ -179,6 +187,7 @@ final class SignalEngine
                 'symbols_scanned'      => $scanned,
                 'symbols_no_feature'   => $noFeatureRow,
                 'skip_reasons'         => $skipReasons,
+                'trap_vetoes'          => $trapVetoes,
                 'cluster_dumps_yday'   => $clusterDumpCount,
                 'cluster_pause_active' => $clusterTriggered,
                 'time_exit_days'       => (int)($this->cfg['timeExitDays'] ?? 20),
@@ -205,6 +214,7 @@ final class SignalEngine
         $btcRets  = $this->dailyReturns('BTC');
         $s6Floor  = (float)($this->cfg['s6MinTurnover20dUsd'] ?? 1_000_000);
         $signals  = [];
+        $trapVetoes = [];
         $scanned  = 0;
         $s6Relaxed = 0;
         $noMtf    = 0;
@@ -249,6 +259,13 @@ final class SignalEngine
                 if (isset($dormant[$fire['setup']])) {
                     continue;
                 }
+                // Wait-for-the-turn veto. Pass null for the parabolic move: a 4h
+                // move is not comparable to the daily threshold, so only the
+                // RSI-slope rule applies on the intraday cadence.
+                if (TrapGate::veto($fire, $mtf, null, $this->cfg) !== null) {
+                    $trapVetoes[$fire['setup']] = ($trapVetoes[$fire['setup']] ?? 0) + 1;
+                    continue;
+                }
                 $entryPx = $fire['entry_px'] ?? $refClose;
                 $size = $this->sizer->size(
                     entryPx: $entryPx,
@@ -290,6 +307,7 @@ final class SignalEngine
                 'symbols_total'      => count($symbols),
                 'symbols_scanned'    => $scanned,
                 'symbols_s6_relaxed' => $s6Relaxed,
+                'trap_vetoes'        => $trapVetoes,
                 's6_min_turnover'    => $s6Floor,
                 'symbols_no_mtf'     => $noMtf,
                 'time_exit_days'     => (int)($this->cfg['timeExitDays'] ?? 20),

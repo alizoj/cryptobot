@@ -1,0 +1,140 @@
+<?php
+
+declare(strict_types=1);
+
+/** @var yii\web\View $this */
+/** @var list<array<string, mixed>> $rows */
+/** @var int $updated */
+/** @var string $sort */
+/** @var string $dir */
+/** @var array<string, float> $tfs */
+
+use yii\helpers\Html;
+
+$this->title = 'RSI Heatmap';
+$this->render('_kit');
+
+$this->registerCss(<<<CSS
+.rsi-table td, .rsi-table th { padding: .3rem .5rem; }
+.rsi-cell { text-align: center; border-radius: .25rem; }
+.rsi-table th a { color: inherit; text-decoration: none; }
+.rsi-table th a:hover { text-decoration: underline; }
+.rsi-legend span { display: inline-block; width: 1.4rem; height: .8rem; vertical-align: middle; border-radius: .15rem; }
+CSS);
+
+// Diverging heatmap: neutral RSI (~50) stays clear; tint toward green as it
+// gets oversold and red as it gets overbought, with the tint strengthening at
+// the extremes. Uses an alpha tint (not a solid fill) and the theme's own text
+// colour, so it reads cleanly in both light and dark mode.
+$rsiCell = static function ($v, bool $strong = false): string {
+    if ($v === null || !is_numeric($v)) {
+        return '<td class="text-center text-muted">—</td>';
+    }
+    $v = (float)$v;
+    $dist  = min(1.0, abs($v - 50) / 50);                 // 0 at neutral, 1 at extremes
+    $hue   = $v < 50 ? 145 : 2;                           // green oversold / red overbought
+    $alpha = round(($strong ? 0.72 : 0.58) * pow($dist, 0.85), 3);
+    $style = "background-color:hsla({$hue},64%,45%,{$alpha});";
+    $weight = $strong ? ' fw-bold' : ' fw-semibold';
+    return '<td class="rsi-cell num' . $weight . '" style="' . $style . '">' . number_format($v, 1) . '</td>';
+};
+
+$fmtPx = static function (float $v): string {
+    if ($v >= 100)  return number_format($v, 2);
+    if ($v >= 1)    return number_format($v, 4);
+    if ($v >= 0.01) return number_format($v, 5);
+    return rtrim(rtrim(sprintf('%.8f', $v), '0'), '.');
+};
+$chgCell = static function (?float $c): string {
+    if ($c === null) return '<td class="text-center text-muted">—</td>';
+    $cls = $c >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return '<td class="text-end num ' . $cls . '">' . ($c >= 0 ? '+' : '') . number_format($c, 1) . '%</td>';
+};
+$turnover = static function (?float $t): string {
+    if ($t === null) return '—';
+    if ($t >= 1_000_000_000) return '$' . number_format($t / 1_000_000_000, 2) . 'B';
+    if ($t >= 1_000_000)     return '$' . number_format($t / 1_000_000, 1) . 'M';
+    if ($t >= 1_000)         return '$' . number_format($t / 1_000, 0) . 'K';
+    return '$' . number_format($t, 0);
+};
+
+// Sortable header link: toggles dir when re-clicking the active column.
+$th = static function (string $key, string $label, string $align = 'center') use ($sort, $dir): string {
+    $nextDir = ($sort === $key && $dir === 'asc') ? 'desc' : 'asc';
+    $arrow = $sort === $key ? ($dir === 'asc' ? ' ▲' : ' ▼') : '';
+    $url = Html::a(Html::encode($label) . $arrow, ['rsi', 'sort' => $key, 'dir' => $nextDir]);
+    return '<th class="text-' . $align . '">' . $url . '</th>';
+};
+
+$ago = max(0, time() - $updated);
+$agoStr = $ago < 60 ? "{$ago}s" : ($ago < 3600 ? floor($ago / 60) . 'm' : floor($ago / 3600) . 'h ' . floor(($ago % 3600) / 60) . 'm');
+?>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-2">
+    <h1 class="h4 mb-0">RSI Heatmap <span class="text-secondary fs-6 fw-normal"><?= count($rows) ?> coins</span></h1>
+    <div class="d-flex align-items-center gap-3">
+        <span class="rsi-legend small text-secondary">
+            oversold
+            <span style="background-color:hsla(145,64%,45%,0.58)"></span>
+            <span style="background-color:hsla(145,64%,45%,0.22)"></span>
+            <span style="background-color:transparent;border:1px solid var(--bs-border-color)"></span>
+            <span style="background-color:hsla(2,64%,45%,0.22)"></span>
+            <span style="background-color:hsla(2,64%,45%,0.58)"></span>
+            overbought
+        </span>
+        <span class="text-secondary small">updated <?= $agoStr ?> ago</span>
+        <?= Html::a('↻ Refresh', ['rsi', 'refresh' => 1, 'sort' => $sort, 'dir' => $dir], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
+    </div>
+</div>
+
+<p class="text-secondary small mb-2">
+    Wilder RSI(14) per timeframe, Bybit data. <strong>AGG</strong> = weighted blend
+    (1h&times;1.0, 4h&times;1.6, 1d&times;2.4, 1w&times;3.0). Sorted oversold &rarr; overbought by default.
+</p>
+
+<div class="card card-section">
+    <div class="table-responsive">
+        <table class="table table-sm tr-table rsi-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <?= $th('symbol', 'Coin', 'start') ?>
+                    <?= $th('price', 'Price', 'end') ?>
+                    <?= $th('chg24h', '24h', 'end') ?>
+                    <?= $th('1h', '1h') ?>
+                    <?= $th('4h', '4h') ?>
+                    <?= $th('1d', '1d') ?>
+                    <?= $th('1w', '1w') ?>
+                    <?= $th('agg', 'AGG') ?>
+                    <?= $th('turnover20', 'Turnover', 'end') ?>
+                    <th class="text-center"></th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($rows as $r): ?>
+                <tr>
+                    <td class="fw-semibold">
+                        <?= Html::encode($r['symbol']) ?>
+                        <?php if (!$r['tradeable']): ?>
+                            <span class="badge bg-secondary-subtle text-secondary-emphasis" title="Below the $5M turnover floor — not currently traded">thin</span>
+                        <?php endif ?>
+                    </td>
+                    <td class="text-end num"><?= $fmtPx((float)$r['price']) ?></td>
+                    <?= $chgCell($r['chg24h'] !== null ? (float)$r['chg24h'] : null) ?>
+                    <?= $rsiCell($r['rsi']['1h']) ?>
+                    <?= $rsiCell($r['rsi']['4h']) ?>
+                    <?= $rsiCell($r['rsi']['1d']) ?>
+                    <?= $rsiCell($r['rsi']['1w']) ?>
+                    <?= $rsiCell($r['agg'], true) ?>
+                    <td class="text-end num text-secondary"><?= $turnover($r['turnover20'] !== null ? (float)$r['turnover20'] : null) ?></td>
+                    <td class="text-center">
+                        <?= Html::a('📈', ['chart', 'symbol' => $r['symbol']], ['class' => 'text-decoration-none', 'target' => '_blank', 'title' => 'Open chart']) ?>
+                    </td>
+                </tr>
+            <?php endforeach ?>
+            <?php if ($rows === []): ?>
+                <tr><td colspan="10" class="text-center text-muted py-4">No coin data. Run <code>./yii trading/fetch-data</code> first.</td></tr>
+            <?php endif ?>
+            </tbody>
+        </table>
+    </div>
+</div>

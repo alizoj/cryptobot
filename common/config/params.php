@@ -48,6 +48,27 @@ return [
         'clusterPauseThreshold' => 50,
         'fundingMode'           => 'mean',  // 'mean' or 'live' (mean per Exp 12)
 
+        // ---- entry confirmation: "wait-for-the-turn" veto (rsi-module detectTraps port) ----
+        // When true, the reversal/fade setups in turnConfirmSetups must show the
+        // RSI turn has started before firing: a fire is vetoed if every available
+        // 4h/1h RSI slope is still moving against the trade, or the bar is a
+        // parabolic/capitulation move (|daily ret| >= parabolicMovePct) with no
+        // slope turn yet. See common\services\Trading\TrapGate.
+        //
+        // Backtest (`php yii trading-backtest/gate` and /s6, 2022–2025): with the
+        // set below the gate lifts the workhorse L5 expectancy +3% on the live
+        // $5M universe, +15% on the broad $1M universe, +13% intraday — at the
+        // cost of ~⅓ fewer L5 fires. S3 was REMOVED: gating it vetoes the biggest
+        // volume-exhaustion winners (kept −0.05R vs vetoed +2.58R at $250k).
+        // Default OFF: the 2022–2025 edge is thin (+2.4% on L5, live $5M universe)
+        // and INVERTS over the last ~18 months — Dec'24–Jun'26 the gate vetoes the
+        // better trades (L5 vetoed +0.165 vs kept +0.082). Flip to true only if a
+        // fresh `trading-backtest/gate` shows the recent-regime edge has returned.
+        'requireTurnConfirmation' => false,
+        'turnConfirmSetups'       => ['L2', 'L5', 'S4', 'S6'],   // S3 excluded — gate harms it
+        'parabolicMovePct'        => 0.12,  // |daily ret| beyond which an un-turned move is vetoed
+        'turnSlopeEps'            => 0.0,   // RSI-slope deadband (0 = strict sign)
+
         // ---- universe ----
         'minDailyCandles'       => 60,
         'minTurnover20dUsd'     => 5_000_000,
@@ -57,7 +78,7 @@ return [
         // Wide stops + risk-based sizing keep notional small. Intraday scan only.
         's6MinTurnover20dUsd'   => 1_000_000,
         'blacklist'             => [],
-        'memecoinPriceOnly'     => [],
+        'memecoinPriceOnly'     => ['FET'],   // spot-only on Bybit (no linear perp) — skip funding/OI conditions
 
         // ---- DORMANT setups (won't fire even if data matches) ----
         // S1 + S2 re-enabled to broaden short coverage (TRADE/SIMULATION_RESULT_*
