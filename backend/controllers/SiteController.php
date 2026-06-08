@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace backend\controllers;
 
+use common\components\LanguageSelector;
 use common\models\LoginForm;
 use common\services\Trading\PositionStore;
 use common\services\Trading\TelegramNotifier;
@@ -11,6 +12,7 @@ use Yii;
 use yii\filters\AccessControl;
 use yii\filters\VerbFilter;
 use yii\web\Controller;
+use yii\web\Cookie;
 use yii\web\ErrorAction;
 use yii\web\Response;
 
@@ -29,7 +31,7 @@ class SiteController extends Controller
                 'class' => AccessControl::class,
                 'rules' => [
                     [
-                        'actions' => ['login', 'error'],
+                        'actions' => ['login', 'error', 'language'],
                         'allow' => true,
                     ],
                     [
@@ -112,5 +114,25 @@ class SiteController extends Controller
         Yii::$app->user->logout();
 
         return $this->goHome();
+    }
+
+    /**
+     * Persist the UI language choice (en | ru) in a year-long cookie, then
+     * return to the page the switch was clicked from. {@see LanguageSelector}
+     * reads the cookie on the next request and sets Yii::$app->language.
+     */
+    public function actionLanguage(string $lang): Response
+    {
+        if (in_array($lang, LanguageSelector::SUPPORTED, true)) {
+            Yii::$app->response->cookies->add(new Cookie([
+                'name'     => LanguageSelector::COOKIE,
+                'value'    => $lang,
+                'expire'   => time() + 365 * 24 * 3600,
+                'httpOnly' => false,
+                'sameSite' => Cookie::SAME_SITE_LAX,
+            ]));
+        }
+        $ref = Yii::$app->request->referrer;
+        return $this->redirect($ref ?: Yii::$app->homeUrl);
     }
 }

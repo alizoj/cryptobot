@@ -107,6 +107,17 @@ final class TradingController extends Controller
         ]);
     }
 
+    /**
+     * "How it works" — the full signal algorithm explained, in EN or RU. The
+     * language follows Yii::$app->language (set from the `lang` cookie by
+     * {@see \common\components\LanguageSelector}); the view renders the matching
+     * partial. Read-only, so any logged-in user (admin or guest) may view it.
+     */
+    public function actionHowItWorks(): string
+    {
+        return $this->render('how-it-works');
+    }
+
     public function actionSaveSettings(): Response
     {
         $patch = UiSettings::resolve(Yii::$app->request->post());

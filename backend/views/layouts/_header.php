@@ -8,30 +8,33 @@ use yii\bootstrap5\Nav;
 use yii\bootstrap5\NavBar;
 use yii\helpers\Html;
 
+$lang = str_starts_with((string)Yii::$app->language, 'ru') ? 'ru' : 'en';
+
 $items = [
     [
-        'label' => 'Home',
+        'label' => Yii::t('app', 'Home'),
         'url' => ['/site/index'],
     ],
     [
-        'label' => 'Trading',
+        'label' => Yii::t('app', 'Trading'),
         'url' => ['/trading/index'],
         'visible' => !Yii::$app->user->isGuest,
         'items' => [
-            ['label' => 'Dashboard', 'url' => ['/trading/index']],
-            ['label' => 'RSI heatmap', 'url' => ['/trading/rsi']],
-            ['label' => 'Daily scan', 'url' => ['/trading/scan-preview']],
-            ['label' => '4h scan', 'url' => ['/trading/scan4h-preview']],
-            ['label' => 'Symbol chart', 'url' => ['/trading/chart', 'symbol' => 'BTC']],
+            ['label' => Yii::t('app', 'Dashboard'), 'url' => ['/trading/index']],
+            ['label' => Yii::t('app', 'RSI heatmap'), 'url' => ['/trading/rsi']],
+            ['label' => Yii::t('app', 'Daily scan'), 'url' => ['/trading/scan-preview']],
+            ['label' => Yii::t('app', '4h scan'), 'url' => ['/trading/scan4h-preview']],
+            ['label' => Yii::t('app', 'Symbol chart'), 'url' => ['/trading/chart', 'symbol' => 'BTC']],
+            ['label' => Yii::t('app', 'How it works'), 'url' => ['/trading/how-it-works']],
         ],
     ],
     [
-        'label' => 'Login',
+        'label' => Yii::t('app', 'Login'),
         'url' => ['/site/login'],
         'visible' => Yii::$app->user->isGuest,
     ],
     [
-        'label' => 'Logout (' . Html::encode(Yii::$app->user->identity?->username) . ')',
+        'label' => Yii::t('app', 'Logout ({username})', ['username' => Html::encode(Yii::$app->user->identity?->username)]),
         'url' => ['/site/logout'],
         'linkOptions' => [
             'data-method' => 'post',
@@ -58,6 +61,17 @@ $items = [
             'items' => $items,
         ],
     ) ?>
+    <div class="navbar-nav flex-row align-items-center me-2" id="lang-switch" role="group" aria-label="Language">
+        <?= Html::a('EN', ['/site/language', 'lang' => 'en'], [
+            'class' => 'nav-link px-2' . ($lang === 'en' ? ' active fw-semibold' : ' text-secondary'),
+            'aria-current' => $lang === 'en' ? 'true' : null,
+        ]) ?>
+        <span class="text-secondary small">/</span>
+        <?= Html::a('RU', ['/site/language', 'lang' => 'ru'], [
+            'class' => 'nav-link px-2' . ($lang === 'ru' ? ' active fw-semibold' : ' text-secondary'),
+            'aria-current' => $lang === 'ru' ? 'true' : null,
+        ]) ?>
+    </div>
     <?= Html::button(
         '&#127769;',
         [

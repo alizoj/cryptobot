@@ -14,6 +14,17 @@ return [
     ],
     'vendorPath' => dirname(dirname(__DIR__)) . '/vendor',
     'components' => [
+        'i18n' => [
+            'translations' => [
+                'app' => [
+                    'class' => \yii\i18n\PhpMessageSource::class,
+                    'sourceLanguage' => 'en',
+                    'basePath' => '@common/messages',
+                    // en is the source language, so only ru/app.php is needed;
+                    // missing/untranslated keys fall back to the English source.
+                ],
+            ],
+        ],
         'cache' => [
             'class' => \yii\redis\Cache::class,
             'keyPrefix' => 'crypto_',
