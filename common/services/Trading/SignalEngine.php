@@ -48,6 +48,7 @@ final class SignalEngine
      * @return array{
      *   as_of: string,
      *   signals: list<array<string,mixed>>,
+     *   delta_alignment: list<array<string,mixed>>,
      *   diagnostics: array<string,mixed>
      * }
      */
@@ -69,6 +70,7 @@ final class SignalEngine
         $signals     = [];
         $skipReasons = [];
         $trapVetoes  = [];
+        $deltaActive = [];
         $scanned     = 0;
         $noFeatureRow = 0;
 
@@ -106,6 +108,16 @@ final class SignalEngine
             // Multi-timeframe block for the MTF setups (L5 / S6). $i is the
             // index of the as-of feature row located in the loop above.
             $ctx['mtf'] = MtfContext::compute($this->md, $symbol, $features, $i);
+
+            // DELTA_ALIGNMENT_SHORT_V1 screener — a pure SMA15/SMA50 indicator
+            // (no entry/stop/size), evaluated as of this symbol's daily close so
+            // the scan stays reproducible. Rides along in $ctx; actives are also
+            // collected into the result's top-level delta_alignment list.
+            $dayCloseMs = (int)$today['ts'] + 86400000;
+            $ctx['delta_alignment'] = DeltaAlignment::evaluate($this->md, $symbol, $dayCloseMs);
+            if ($ctx['delta_alignment']['active']) {
+                $deltaActive[] = ['symbol' => $symbol] + $ctx['delta_alignment'];
+            }
 
             $fires = $this->evaluator->evaluate($today, $ctx, $priceOnly);
             if (empty($fires)) {
@@ -182,16 +194,18 @@ final class SignalEngine
         return [
             'as_of'   => $asOf,
             'signals' => $signals,
+            'delta_alignment' => $deltaActive,
             'diagnostics' => [
-                'symbols_total'        => count($symbols),
-                'symbols_scanned'      => $scanned,
-                'symbols_no_feature'   => $noFeatureRow,
-                'skip_reasons'         => $skipReasons,
-                'trap_vetoes'          => $trapVetoes,
-                'cluster_dumps_yday'   => $clusterDumpCount,
-                'cluster_pause_active' => $clusterTriggered,
-                'time_exit_days'       => (int)($this->cfg['timeExitDays'] ?? 20),
-                'funding_mode'         => $fundingMode,
+                'symbols_total'          => count($symbols),
+                'symbols_scanned'        => $scanned,
+                'symbols_no_feature'     => $noFeatureRow,
+                'skip_reasons'           => $skipReasons,
+                'trap_vetoes'            => $trapVetoes,
+                'delta_alignment_active' => count($deltaActive),
+                'cluster_dumps_yday'     => $clusterDumpCount,
+                'cluster_pause_active'   => $clusterTriggered,
+                'time_exit_days'         => (int)($this->cfg['timeExitDays'] ?? 20),
+                'funding_mode'           => $fundingMode,
             ],
         ];
     }

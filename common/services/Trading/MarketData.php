@@ -137,6 +137,74 @@ final class MarketData
         return $this->intervalCandles($symbol, 'W');
     }
 
+    /**
+     * The last $lookback bars of $interval at/before $asOfMs (newest last) —
+     * a tail read for short indicators (e.g. the DeltaAlignment screener) that
+     * only need a small window. Unlike {@see intervalCandles} it keys just the
+     * window, not the whole series, so it stays cheap on the dense sub-hourly
+     * intervals. The full record is still decoded once (and cached by
+     * loadSymbol), but no per-bar array is built outside the window.
+     *
+     * "At/before $asOfMs" means the bar's OPEN ts <= $asOfMs, so the window
+     * ends at the as-of bar (which may still be forming — the caller decides
+     * completeness). Returns fewer than $lookback rows near the series start.
+     *
+     * @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}>
+     */
+    public function intervalWindowAsOf(string $symbol, string $interval, int $asOfMs, int $lookback): array
+    {
+        $rec  = $this->loadSymbol($symbol);
+        $rows = $rec['history']['intervals'][$interval]['rows'] ?? [];
+        return self::windowFromRows($rows, $asOfMs, $lookback);
+    }
+
+    /**
+     * Pure core of {@see intervalWindowAsOf}: from raw positional kline tuples
+     * ([ts,o,h,l,c,v,...], ascending by ts) return the keyed OHLCV window of up
+     * to $lookback rows ending at the newest bar whose open ts <= $asOfMs.
+     * Binary-searches the endpoint, so a past $asOfMs is as cheap as a live one.
+     *
+     * @param list<array<int,mixed>> $rows
+     * @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}>
+     */
+    public static function windowFromRows(array $rows, int $asOfMs, int $lookback): array
+    {
+        $n = count($rows);
+        if ($n === 0 || $lookback <= 0) {
+            return [];
+        }
+        // Rightmost index with open ts <= $asOfMs (rows are ascending by ts).
+        $lo = 0;
+        $hi = $n - 1;
+        $end = -1;
+        while ($lo <= $hi) {
+            $mid = intdiv($lo + $hi, 2);
+            if ((int)$rows[$mid][0] <= $asOfMs) {
+                $end = $mid;
+                $lo  = $mid + 1;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+        if ($end < 0) {
+            return [];
+        }
+        $start = max(0, $end - $lookback + 1);
+        $out = [];
+        for ($k = $start; $k <= $end; $k++) {
+            $r = $rows[$k];
+            $out[] = [
+                'ts' => (int)$r[0],
+                'o'  => (float)$r[1],
+                'h'  => (float)$r[2],
+                'l'  => (float)$r[3],
+                'c'  => (float)$r[4],
+                'v'  => (float)($r[5] ?? 0.0),
+            ];
+        }
+        return $out;
+    }
+
     public function hasDerivatives(string $symbol): bool
     {
         $rec = $this->loadSymbol($symbol);

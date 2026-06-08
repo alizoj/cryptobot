@@ -10,9 +10,15 @@ use Throwable;
 use Yii;
 
 /**
- * Pull lifetime OHLCV candles (daily, 4h, 1h + weekly by default) for every
- * HashHedge-listed symbol from the Bybit V5 public API and write them out
- * to common/data/history_prices/<SYMBOL>.json.
+ * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 5m by default)
+ * for every HashHedge-listed symbol from the Bybit V5 public API and write them
+ * out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/5m intervals back
+ * the DELTA_ALIGNMENT_SHORT_V1 screener ({@see \common\services\Trading\DeltaAlignment}).
+ *
+ * Lifetime history is fetched for 1h-and-longer intervals; sub-hourly ones
+ * (30m/5m) backfill only a recent window ({@see backfillStartMs}) — crawling
+ * them from a 2018 launch would blow past the KLINE page cap and never reach
+ * the present.
  *
  * Subsequent runs are incremental: per interval, if the last stored bar is
  * older than one period, we re-fetch from that bar's timestamp forward and
@@ -24,7 +30,16 @@ final class BybitPriceFetcher
 {
     public const KLINE_LIMIT = 1000;
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000; // 2018-01-01 UTC
-    public const DEFAULT_INTERVALS = ['D', 'W', '4h', '1h'];
+    public const DEFAULT_INTERVALS = ['D', 'W', '4h', '2h', '1h', '30m', '5m'];
+
+    /**
+     * Recent-window size, in bars, for sub-hourly backfills (see
+     * {@see backfillStartMs}). SMA50 — the DELTA_ALIGNMENT screener's longest
+     * lookback — needs 50; this keeps generous margin while bounding the
+     * initial fetch to ~6 KLINE pages (must stay <= 50 * KLINE_LIMIT, the
+     * fetchLifetimeKlines page cap).
+     */
+    public const SHORT_BACKFILL_BARS = 6000;
 
     public const INTERVAL_LABELS = [
         'M'   => 'M',
@@ -350,9 +365,32 @@ final class BybitPriceFetcher
         return array_values($byTs);
     }
 
+    /**
+     * Start timestamp for a *full* (from-scratch) backfill of $label.
+     *
+     * Lifetime intervals (1h and longer) start at the instrument launch.
+     * Sub-hourly intervals (30m/15m/5m/...) would need far more than the KLINE
+     * page cap (see {@see fetchLifetimeKlines}'s $safety guard) to crawl from a
+     * 2018 launch to the present, so they start from a recent window of
+     * SHORT_BACKFILL_BARS bars instead — enough for the DELTA_ALIGNMENT screener
+     * with margin, and bounded to a few API pages. Clamped to $launchMs so a
+     * brand-new listing never asks for bars before it existed. Incremental
+     * refreshes are unaffected: once the first windowed fetch reaches the
+     * present, later runs simply resume from the last stored bar.
+     */
+    public static function backfillStartMs(string $label, int $launchMs, int $nowMs): int
+    {
+        $period = self::INTERVAL_PERIOD_MS[$label] ?? 3_600_000;
+        if ($period >= 3_600_000) {
+            return $launchMs;
+        }
+        return max($launchMs, $nowMs - self::SHORT_BACKFILL_BARS * $period);
+    }
+
     private function buildIntervalEntry(string $category, string $bybitSymbol, string $label, int $launchMs): array
     {
-        $klines = $this->fetchLifetimeKlines($category, $bybitSymbol, $launchMs, self::INTERVAL_LABELS[$label]);
+        $startMs = self::backfillStartMs($label, $launchMs, (int)(microtime(true) * 1000));
+        $klines = $this->fetchLifetimeKlines($category, $bybitSymbol, $startMs, self::INTERVAL_LABELS[$label]);
         return [
             'schema'        => ['startTime_ms', 'open', 'high', 'low', 'close', 'volume', 'turnover'],
             'rows'          => $klines,
