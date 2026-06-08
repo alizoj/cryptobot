@@ -29,6 +29,14 @@ final class MtfContext
     private const H1_MS = 3600 * 1000;
 
     /**
+     * Tail length read for the 4h/1h series. Only RSI(14) and its slope at the
+     * last completed bar are needed; a simple-average RSI depends on ≤16 closes,
+     * so a 128-bar tail yields results identical to the full series while keeping
+     * the scan off the (tens-of-thousands of bars) intraday history.
+     */
+    private const H_TAIL = 128;
+
+    /**
      * @param array<int, array<string,mixed>> $features daily feature rows (Features::computeDaily)
      * @param int $i index of the as-of (just-closed) daily row in $features
      * @return array<string, mixed>
@@ -82,7 +90,7 @@ final class MtfContext
         }
 
         // ---- 4h: last completed bar + RSI (+ slope) ----
-        $h4   = $md->fourHourCandles($symbol);
+        $h4   = $md->intervalWindowAsOf($symbol, '4h', $dayCloseTs, self::H_TAIL);
         $h4c  = array_column($h4, 'c');
         $h4i  = self::lastCompletedIdx($h4, $dayCloseTs, self::H4_MS);
         $h4_rsi   = self::rsiAt($h4c, $h4i, 14);
@@ -90,7 +98,7 @@ final class MtfContext
         $h4_last  = self::barFeatures($h4, $h4i);
 
         // ---- 1h: RSI of last completed bar (+ slope) ----
-        $h1  = $md->hourlyCandles($symbol);
+        $h1  = $md->intervalWindowAsOf($symbol, '1h', $dayCloseTs, self::H_TAIL);
         $h1c = array_column($h1, 'c');
         $h1i = self::lastCompletedIdx($h1, $dayCloseTs, self::H1_MS);
         $h1_rsi   = self::rsiAt($h1c, $h1i, 14);
@@ -176,7 +184,7 @@ final class MtfContext
         }
 
         // 4h: last completed bar at $asOfMs
-        $h4  = $md->fourHourCandles($symbol);
+        $h4  = $md->intervalWindowAsOf($symbol, '4h', $asOfMs, self::H_TAIL);
         $h4c = array_column($h4, 'c');
         $h4i = self::lastCompletedIdx($h4, $asOfMs, self::H4_MS);
         if ($h4i < 1) {
@@ -187,7 +195,7 @@ final class MtfContext
         $h4_last  = self::barFeatures($h4, $h4i);
 
         // 1h: last completed bar at $asOfMs
-        $h1  = $md->hourlyCandles($symbol);
+        $h1  = $md->intervalWindowAsOf($symbol, '1h', $asOfMs, self::H_TAIL);
         $h1c = array_column($h1, 'c');
         $h1i = self::lastCompletedIdx($h1, $asOfMs, self::H1_MS);
         $h1_rsi   = self::rsiAt($h1c, $h1i, 14);

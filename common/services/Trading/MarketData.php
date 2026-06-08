@@ -45,14 +45,24 @@ final class MarketData
         if ($this->cachedSymbol === $symbol) {
             return $this->cachedRecord;
         }
+        // Switching symbols: release the previous symbol's record AND its derived
+        // candle arrays BEFORE reading/decoding the next file. A universe scan
+        // decodes 100+ multi-interval blobs back-to-back, and each decoded record
+        // is tens of MB; holding the outgoing one while the incoming one decodes
+        // is what blows the memory limit (see MarketData::intervalWindowAsOf for
+        // the matching tail-read that keeps callers off the full series).
+        $this->cachedRecord = null;
+        $this->candleCache  = [];
+        $this->candleSymbol = null;
+        $this->cachedSymbol = $symbol;
+
         $path = Paths::historyPricesDir() . "/{$symbol}.json";
         if (!is_file($path)) {
-            $this->cachedSymbol = $symbol;
-            $this->cachedRecord = null;
             return null;
         }
-        $rec = json_decode((string)file_get_contents($path), true);
-        $this->cachedSymbol = $symbol;
+        $json = (string)file_get_contents($path);
+        $rec  = json_decode($json, true);
+        unset($json);   // free the multi-MB source string before we keep the record
         $this->cachedRecord = is_array($rec) ? $rec : null;
         return $this->cachedRecord;
     }
