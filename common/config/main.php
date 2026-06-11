@@ -6,7 +6,6 @@ return [
     'bootstrap' => [
         'queue',
         \common\bootstrap\MailerBootstrap::class,
-        \common\bootstrap\TradingSettingsBootstrap::class,
     ],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',
@@ -30,11 +29,10 @@ return [
             'keyPrefix' => 'crypto_',
             'defaultDuration' => 300,
         ],
-        // Signal scanning runs through this queue (not cron). The Redis driver
-        // reuses the `redis` connection from main-local.php and supports the
-        // delayed jobs the hourly self-reschedule needs. Worker:
-        //   ./yii queue/listen --verbose=1
-        // See docs/TRADING_BOT_SETUP.md §4 for the production worker setup.
+        // The hourly market-data refresh runs through this queue (not cron).
+        // The Redis driver reuses the `redis` connection from main-local.php
+        // and supports the delayed jobs the hourly self-reschedule needs.
+        // Worker:  ./yii queue/listen --verbose=1
         'queue' => [
             'class'   => \yii\queue\redis\Queue::class,
             'redis'   => 'redis',          // the redis component id

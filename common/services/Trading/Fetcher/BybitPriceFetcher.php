@@ -12,8 +12,8 @@ use Yii;
 /**
  * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 5m by default)
  * for every HashHedge-listed symbol from the Bybit V5 public API and write them
- * out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/5m intervals back
- * the DELTA_ALIGNMENT_SHORT_V1 screener ({@see \common\services\Trading\DeltaAlignment}).
+ * out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/5m intervals are
+ * kept for short multi-timeframe indicators.
  *
  * Lifetime history is fetched for 1h-and-longer intervals; sub-hourly ones
  * (30m/5m) backfill only a recent window ({@see backfillStartMs}) — crawling

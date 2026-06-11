@@ -3,11 +3,6 @@
 declare(strict_types=1);
 
 /** @var yii\web\View $this */
-/** @var int $openCount */
-/** @var int $closedCount */
-/** @var int $signalCount */
-/** @var bool $telegramOn */
-/** @var array<string, mixed> $params */
 
 use yii\helpers\Html;
 
@@ -15,9 +10,6 @@ $this->title = 'Dashboard';
 $username = Yii::$app->user->identity?->username;
 
 $this->registerCss(<<<CSS
-.dash-kpi { border: 0; border-radius: .7rem; box-shadow: 0 1px 3px rgba(0,0,0,.09); }
-.dash-kpi .v { font-size: 1.7rem; font-weight: 600; line-height: 1; }
-.dash-kpi .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--bs-secondary-color); }
 .nav-card { border: 0; border-radius: .8rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); transition: transform .12s ease, box-shadow .12s ease; height: 100%; }
 .nav-card:hover { transform: translateY(-3px); box-shadow: 0 6px 18px rgba(0,0,0,.12); }
 .nav-card .ic { font-size: 1.8rem; line-height: 1; }
@@ -27,9 +19,7 @@ CSS);
 
 /** @var list<array{icon:string,title:string,desc:string,route:array,accent:string}> $links */
 $links = [
-    ['icon' => '📊', 'title' => 'Trading dashboard', 'desc' => 'Open positions, realised P&L and recent signals.', 'route' => ['/trading/index'], 'accent' => 'primary'],
-    ['icon' => '📅', 'title' => 'Daily scan', 'desc' => 'Dry-run the daily setups (L1–S4) for any UTC day.', 'route' => ['/trading/scan-preview'], 'accent' => 'success'],
-    ['icon' => '⏱️', 'title' => '4h scan', 'desc' => 'Dry-run the 4h multi-timeframe setups (L5 / S6).', 'route' => ['/trading/scan4h-preview'], 'accent' => 'info'],
+    ['icon' => '🌡️', 'title' => 'RSI heatmap', 'desc' => 'Multi-timeframe Wilder RSI(14) across the whole coin universe.', 'route' => ['/trading/rsi'], 'accent' => 'success'],
     ['icon' => '🕯️', 'title' => 'Symbol chart', 'desc' => 'Interactive candlestick chart for any symbol.', 'route' => ['/trading/chart', 'symbol' => 'BTC'], 'accent' => 'warning'],
 ];
 ?>
@@ -40,30 +30,12 @@ $links = [
         <div class="row align-items-center">
             <div class="col-lg-8">
                 <h1 class="fw-bold mb-2">Welcome back, <?= Html::encode($username) ?></h1>
-                <p class="opacity-75 mb-0">Crypto trading-bot admin — scan, monitor positions and chart setups.</p>
+                <p class="opacity-75 mb-0">Crypto market monitor — coin charts and the RSI heatmap. A new signal engine is in the works.</p>
             </div>
             <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
-                <?= Html::a('Open trading dashboard →', ['/trading/index'], ['class' => 'btn btn-light fw-semibold']) ?>
+                <?= Html::a('Open RSI heatmap →', ['/trading/rsi'], ['class' => 'btn btn-light fw-semibold']) ?>
             </div>
         </div>
-    </div>
-
-    <!-- KPIs -->
-    <div class="row row-cols-2 row-cols-md-4 g-3 mb-4">
-        <div class="col"><div class="card dash-kpi h-100"><div class="card-body">
-            <div class="l">Open positions</div><div class="v"><?= (int)$openCount ?></div>
-        </div></div></div>
-        <div class="col"><div class="card dash-kpi h-100"><div class="card-body">
-            <div class="l">Closed trades</div><div class="v"><?= (int)$closedCount ?></div>
-        </div></div></div>
-        <div class="col"><div class="card dash-kpi h-100"><div class="card-body">
-            <div class="l">Signals logged</div><div class="v"><?= (int)$signalCount ?></div>
-        </div></div></div>
-        <div class="col"><div class="card dash-kpi h-100"><div class="card-body">
-            <div class="l">Telegram</div>
-            <div class="v"><?= $telegramOn ? '<span class="badge text-bg-success">on</span>' : '<span class="badge text-bg-danger">off</span>' ?></div>
-            <div class="small text-secondary mt-1">Risk/trade <?= number_format((float)($params['riskPct'] ?? 0) * 100, 2) ?>% · T+<?= (int)($params['timeExitDays'] ?? 20) ?></div>
-        </div></div></div>
     </div>
 
     <!-- Navigation cards -->

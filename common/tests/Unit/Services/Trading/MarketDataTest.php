@@ -5,13 +5,11 @@ declare(strict_types=1);
 namespace common\tests\Unit\Services\Trading;
 
 use Codeception\Test\Unit;
-use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
 
 /**
- * Pure-logic tests for the as-of tail window (windowFromRows) that backs the
- * DeltaAlignment screener's tail read. The file-loading wrapper
- * intervalWindowAsOf() is the thin part and is exercised by the live scan.
+ * Pure-logic tests for the as-of tail window (windowFromRows). The
+ * file-loading wrapper intervalWindowAsOf() is the thin part.
  */
 final class MarketDataTest extends Unit
 {
@@ -59,20 +57,17 @@ final class MarketDataTest extends Unit
         $this->assertSame([], MarketData::windowFromRows($this->rows(10), 999, 0));
     }
 
-    public function testTailReadReproducesFullSeriesDelta(): void
+    public function testTailReadReproducesFullSeriesCloses(): void
     {
-        // The whole point: a windowed read must yield the same delta as reading
-        // the full series and computing at the same completed bar.
+        // The whole point: a windowed read must yield the same closes as
+        // slicing the full series at the same completed bar.
         $rows = $this->rows(200);
         $asOf = 200 * self::P;            // bar 199 fully closed, no later bar
 
         $w = MarketData::windowFromRows($rows, $asOf, 55);
         $this->assertCount(55, $w);
 
-        $deltaTail = DeltaAlignment::delta(array_column($w, 'c'), count($w) - 1);
-        $deltaFull = DeltaAlignment::delta(array_column($rows, 4), 199); // close is col 4 in raw tuples
-
-        $this->assertNotNull($deltaTail);
-        $this->assertEqualsWithDelta($deltaFull, $deltaTail, 1e-9);
+        $fullCloses = array_slice(array_column($rows, 4), -55); // close is col 4 in raw tuples
+        $this->assertSame($fullCloses, array_column($w, 'c'));
     }
 }

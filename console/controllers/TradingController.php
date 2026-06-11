@@ -8,11 +8,6 @@ use common\jobs\ScanSignalsJob;
 use common\services\Trading\ChartRenderer;
 use common\services\Trading\DataFetcher;
 use common\services\Trading\MarketData;
-use common\services\Trading\Paths;
-use common\services\Trading\PositionManager;
-use common\services\Trading\PositionStore;
-use common\services\Trading\ScanRunner;
-use common\services\Trading\SignalEngine;
 use common\services\Trading\TelegramNotifier;
 use Yii;
 use yii\console\Controller;
@@ -20,38 +15,34 @@ use yii\console\ExitCode;
 use yii\helpers\Console;
 
 /**
- * Trading-bot cron entry points.
+ * Trading cron entry points.
+ *
+ * The signal engine has been removed — a new strategy is being built. All the
+ * old scan/manage commands are kept as no-op stubs so existing cron lines and
+ * queue chains keep running without errors; the data-refresh commands still do
+ * real work so the coin charts and the RSI heatmap stay current.
  *
  *   ./yii trading/fetch-data          — refresh prices, derivs, dominance, FNG
- *   ./yii trading/scan                — evaluate Experiment 8 triggers + send entry signals (daily)
- *   ./yii trading/scan-4h             — evaluate the 4h MTF setups (L5/S6) at the latest 4h close
- *   ./yii trading/run-4h              — refresh prices + derivatives, then scan-4h (one self-contained 4h job)
- *   ./yii trading/manage-positions    — trail / funding-flip / T+20 / stop-hit lifecycle
- *   ./yii trading/run-daily           — fetch-data + scan + manage-positions
- *   ./yii trading/run-hourly          — manage-positions (intra-day funding-flip + price moves)
+ *   ./yii trading/scan                — no-op stub (signal engine removed)
+ *   ./yii trading/scan-4h             — no-op stub (signal engine removed)
+ *   ./yii trading/manage-positions    — no-op stub (signal engine removed)
+ *   ./yii trading/run-daily           — fetch-data only
+ *   ./yii trading/run-hourly          — incremental prices + derivatives refresh
+ *   ./yii trading/run-4h              — incremental prices + derivatives refresh
  *   ./yii trading/test-telegram       — send a hello-world to confirm credentials
- *   ./yii trading/test-chart SYMBOL   — render a candlestick chart and send it (verifies image pipeline)
- *   ./yii trading/status              — print open positions + last signals
- *   ./yii trading/queue-scan          — push a one-off scan onto the queue (same as the dashboard button)
- *   ./yii trading/schedule-hourly     — start the hourly self-rescheduling scan loop (queue-native)
- *
- * Scanning now runs through the queue, not cron. Start it once and keep a
- * worker alive (timezone irrelevant — all logic is in UTC):
- *
- *   ./yii trading/schedule-hourly                 # enqueue the recurring hourly scan (run once)
- *   ./yii queue/listen --verbose=1                # long-lived worker (use supervisor / a service in prod)
- *
- * See docs/TRADING_BOT_SETUP.md §4 for the production worker + queue settings.
+ *   ./yii trading/test-chart SYMBOL   — render a candlestick chart and send it
+ *   ./yii trading/queue-scan          — push a one-off data refresh onto the queue
+ *   ./yii trading/schedule-hourly     — start the hourly self-rescheduling refresh loop
  */
 final class TradingController extends Controller
 {
-    /** @var string YYYY-MM-DD override for the as-of day used by scan/manage. */
+    /** @var string accepted for cron compatibility; unused by the stubs. */
     public string $asOf = '';
 
-    /** @var bool dry-run: do everything except actually sending Telegram messages */
+    /** @var bool accepted for cron compatibility; unused by the stubs. */
     public bool $dryRun = false;
 
-    /** @var bool also include DORMANT setups (S1/S2) in scan output. */
+    /** @var bool accepted for cron compatibility; unused by the stubs. */
     public bool $includeDormant = false;
 
     public function options($actionID): array
@@ -89,90 +80,21 @@ final class TradingController extends Controller
         return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
     }
 
-    // ---------- scan ----------
+    // ---------- signal stubs (engine removed, new logic pending) ----------
 
     public function actionScan(): int
     {
-        $asOf = $this->resolveAsOf();
-        $this->stdout("[scan] as_of={$asOf} dry_run=" . ($this->dryRun ? 'yes' : 'no') . "\n", Console::FG_GREEN);
-
-        $engine = new SignalEngine();
-        $result = $engine->scan($asOf);
-
-        $diag = $result['diagnostics'];
-        $this->stdout(sprintf(
-            "  scanned %d/%d  cluster_dumps_yday=%d%s  funding=%s  exit=T+%d\n",
-            $diag['symbols_scanned'], $diag['symbols_total'],
-            $diag['cluster_dumps_yday'],
-            $diag['cluster_pause_active'] ? ' (PAUSED non-L1)' : '',
-            $diag['funding_mode'], $diag['time_exit_days'],
-        ));
-        if (!empty($diag['skip_reasons'])) {
-            $bits = [];
-            foreach ($diag['skip_reasons'] as $k => $v) {
-                $bits[] = "$k=$v";
-            }
-            $this->stdout("  skip: " . implode(' ', $bits) . "\n");
-        }
-        $this->stdout("  signals=" . count($result['signals']) . "\n");
-
-        // One-line scan summary first (console only — the hourly queue job stays
-        // quiet on empty scans to avoid 24 "0 signals" messages a day).
-        $notifier = new TelegramNotifier();
-        $summary  = TelegramNotifier::formatScanSummary($asOf, count($result['signals']), $diag);
-        $this->maybeSend($notifier, $summary, 'scan_summary');
-
-        $counts = (new ScanRunner())->emitSignals(
-            $result['signals'], $this->dryRun,
-            fn(string $l) => $this->stdout("  $l\n"),
-        );
-        $this->stdout("  opened={$counts['opened']} dedup={$counts['dedup']} capped={$counts['capped']} cap={$counts['cap']}\n");
-        return ExitCode::OK;
+        return $this->noop('scan');
     }
 
-    // ---------- 4h MTF scan (L5 / S6) ----------
-
-    /**
-     * Intraday scan of the multi-timeframe setups at the latest completed 4h
-     * close. This is where S6 (and L5's lower-TF oversold timing) actually
-     * fire. Safe to run hourly: dedup is by the 4h-grained as_of, so a setup
-     * won't re-open within the same 4h bar.
-     *
-     *   ./yii trading/scan-4h
-     *   ./yii trading/scan-4h --asOf="2026-05-07 16:00" --dryRun
-     */
     public function actionScan4h(): int
     {
-        $asOfMs = $this->resolveAsOfMs();
-        $engine = new SignalEngine();
-        $result = $engine->scanIntraday($asOfMs);
-
-        $diag = $result['diagnostics'];
-        $this->stdout("[scan-4h] as_of={$result['as_of']} dry_run=" . ($this->dryRun ? 'yes' : 'no') . "\n", Console::FG_GREEN);
-        $this->stdout(sprintf("  scanned %d/%d  signals=%d\n",
-            $diag['symbols_scanned'], $diag['symbols_total'], count($result['signals'])));
-
-        $counts = (new ScanRunner())->emitSignals(
-            $result['signals'], $this->dryRun,
-            fn(string $l) => $this->stdout("  $l\n"),
-        );
-        $this->stdout("  opened={$counts['opened']} dedup={$counts['dedup']} capped={$counts['capped']} cap={$counts['cap']}\n");
-        return ExitCode::OK;
+        return $this->noop('scan-4h');
     }
-
-    // ---------- manage ----------
 
     public function actionManagePositions(): int
     {
-        $asOf = $this->resolveAsOf(allowToday: true);
-        $this->stdout("[manage-positions] as_of={$asOf} dry_run=" . ($this->dryRun ? 'yes' : 'no') . "\n", Console::FG_GREEN);
-
-        $events = (new PositionManager())->manage($asOf);
-        (new ScanRunner())->emitEvents(
-            $events, $asOf, $this->dryRun,
-            fn(string $l) => $this->stdout("  $l\n"),
-        );
-        return ExitCode::OK;
+        return $this->noop('manage-positions');
     }
 
     // ---------- combined ----------
@@ -180,52 +102,19 @@ final class TradingController extends Controller
     public function actionRunDaily(): int
     {
         $this->stdout("[run-daily] " . gmdate('c') . "\n", Console::FG_GREEN);
-        $rc = $this->actionFetchData();
-        if ($rc !== ExitCode::OK) {
-            $this->stderr("fetch-data failed (exit $rc); continuing to scan/manage anyway\n", Console::FG_YELLOW);
-        }
-        $this->actionManagePositions();
-        return $this->actionScan();
+        return $this->actionFetchData();
     }
 
     public function actionRunHourly(): int
     {
         $this->stdout("[run-hourly] " . gmdate('c') . "\n", Console::FG_GREEN);
-        // Cheap incremental refresh — prices + derivatives (skip macro to keep it under a minute).
-        $f = new DataFetcher();
-        $forward = fn(string $line) => $this->stdout("    $line\n");
-        $r = array_merge($f->refreshPrices([], $forward), $f->refreshDerivatives([], $forward));
-        $f->recordCheckpoint($r);
-        foreach ($r as $res) {
-            $tag = $res->ok ? 'OK ' : 'FAIL';
-            $this->stdout(
-                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $res->step, $res->seconds, $res->summary),
-                $res->ok ? Console::FG_GREEN : Console::FG_RED,
-            );
-        }
-        return $this->actionManagePositions();
+        return $this->refreshIncremental();
     }
 
-    /**
-     * Self-contained 4h job: refresh prices + derivatives (so the just-closed
-     * 4h bar is on disk), then run the 4h MTF scan. Use this on a 4h cron
-     * instead of relying on run-hourly + scan-4h ordering.
-     */
     public function actionRun4h(): int
     {
         $this->stdout("[run-4h] " . gmdate('c') . "\n", Console::FG_GREEN);
-        $f = new DataFetcher();
-        $forward = fn(string $line) => $this->stdout("    $line\n");
-        $r = array_merge($f->refreshPrices([], $forward), $f->refreshDerivatives([], $forward));
-        $f->recordCheckpoint($r);
-        foreach ($r as $res) {
-            $tag = $res->ok ? 'OK ' : 'FAIL';
-            $this->stdout(
-                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $res->step, $res->seconds, $res->summary),
-                $res->ok ? Console::FG_GREEN : Console::FG_RED,
-            );
-        }
-        return $this->actionScan4h();
+        return $this->refreshIncremental();
     }
 
     // ---------- ops ----------
@@ -294,52 +183,24 @@ final class TradingController extends Controller
         return ExitCode::UNSPECIFIED_ERROR;
     }
 
-    public function actionStatus(): int
-    {
-        $store = new PositionStore();
-        $open  = $store->openPositions();
-        $sigs  = $store->recentSignals(20);
-        $this->stdout("Open positions: " . count($open) . "\n", Console::FG_GREEN);
-        foreach ($open as $p) {
-            $this->stdout(sprintf("  %s %s %s entry=%s stop=%s opened=%s\n",
-                $p['symbol'] ?? '?', $p['setup'] ?? '?',
-                strtoupper($p['side'] ?? '?'),
-                rtrim(rtrim(sprintf('%.6f', $p['entry_px'] ?? 0), '0'), '.'),
-                rtrim(rtrim(sprintf('%.6f', $p['stop_px']  ?? 0), '0'), '.'),
-                $p['entry_day'] ?? '?',
-            ));
-        }
-        $this->stdout("\nRecent signals (last " . count($sigs) . "):\n");
-        foreach ($sigs as $s) {
-            $kind = $s['kind'] ?? '?';
-            $what = $s['signal']['symbol'] ?? $s['event']['symbol'] ?? '?';
-            $setup = $s['signal']['setup'] ?? $s['event']['setup'] ?? '?';
-            $sent = ($s['sent_ok'] ?? false) ? 'sent' : 'unsent';
-            $this->stdout(sprintf("  [%s] %s %s %s — %s\n",
-                gmdate('Y-m-d H:i', (int)($s['ts'] ?? 0)), $kind, $what, $setup, $sent));
-        }
-        $this->stdout("\nState files: " . Paths::stateDir() . "\n");
-        return ExitCode::OK;
-    }
-
     // ---------- queue ----------
 
     /**
-     * Push a one-off signal scan onto the queue — the same pipeline the
-     * dashboard "Scan now" button uses (refresh prices → manage → daily + 4h
-     * scan). A worker must be running to process it: `./yii queue/listen`.
+     * Push a one-off data refresh onto the queue. A worker must be running to
+     * process it: `./yii queue/listen`.
      */
     public function actionQueueScan(): int
     {
         $id = Yii::$app->queue->push(new ScanSignalsJob(['source' => 'cli']));
-        $this->stdout("queued one-off scan (job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("queued one-off data refresh (job id={$id}).\n", Console::FG_GREEN);
         $this->stdout("Process it with a worker: ./yii queue/listen --verbose=1\n");
         return ExitCode::OK;
     }
 
     /**
-     * Start (or restart) the hourly scan loop (queue-native, no cron). Pushes
-     * one recurring job that re-enqueues the next run $intervalSeconds later.
+     * Start (or restart) the hourly refresh loop (queue-native, no cron).
+     * Pushes one recurring job that re-enqueues the next run $intervalSeconds
+     * later.
      *
      * Safe to re-run: each call bumps a generation token in Redis, and a
      * recurring job only reschedules itself while its generation is current.
@@ -359,7 +220,7 @@ final class TradingController extends Controller
             'source'          => 'schedule',
             'scheduleGen'     => $gen,
         ]));
-        $this->stdout("started hourly scan loop (interval={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("started hourly refresh loop (interval={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
         if ($gen > 1) {
             $this->stdout("Superseded the previous chain — older loops stop after their next run.\n", Console::FG_YELLOW);
         }
@@ -369,49 +230,29 @@ final class TradingController extends Controller
 
     // ---------- helpers ----------
 
-    /** Sends if not dry-run and Telegram is configured; logs the outcome. */
-    private function maybeSend(TelegramNotifier $tg, string $text, string $tag): array
+    /** Old signal command kept as an idle stub so cron lines exit 0. */
+    private function noop(string $name): int
     {
-        if ($this->dryRun) {
-            $this->stdout("    [dry-run] would send ({$tag}, " . strlen($text) . " chars)\n", Console::FG_YELLOW);
-            return ['ok' => false, 'error' => 'dry_run', 'response' => null];
-        }
-        if (!$tg->isConfigured()) {
-            $this->stderr("    telegram not configured — skipping send ({$tag})\n", Console::FG_YELLOW);
-            return ['ok' => false, 'error' => 'not_configured', 'response' => null];
-        }
-        $res = $tg->send($text);
-        if (!$res['ok']) {
-            $this->stderr("    send FAILED ({$tag}): " . $res['error'] . "\n", Console::FG_RED);
-        }
-        return $res;
+        $this->stdout("[{$name}] " . gmdate('c') . " — signal engine removed, nothing to do (new logic pending).\n", Console::FG_YELLOW);
+        return ExitCode::OK;
     }
 
-    /**
-     * Most-recent fully-closed UTC day by default. With $allowToday=true,
-     * defaults to today (for intra-day lifecycle checks).
-     */
-    private function resolveAsOf(bool $allowToday = false): string
+    /** Cheap incremental refresh — prices + derivatives (skip macro to keep it under a minute). */
+    private function refreshIncremental(): int
     {
-        if ($this->asOf !== '') {
-            return $this->asOf;
+        $f = new DataFetcher();
+        $forward = fn(string $line) => $this->stdout("    $line\n");
+        $r = array_merge($f->refreshPrices([], $forward), $f->refreshDerivatives([], $forward));
+        $f->recordCheckpoint($r);
+        $allOk = true;
+        foreach ($r as $res) {
+            $tag = $res->ok ? 'OK ' : 'FAIL';
+            $this->stdout(
+                sprintf("  %s  %-12s  %.1fs  %s\n", $tag, $res->step, $res->seconds, $res->summary),
+                $res->ok ? Console::FG_GREEN : Console::FG_RED,
+            );
+            $allOk = $allOk && $res->ok;
         }
-        return $allowToday
-            ? gmdate('Y-m-d')
-            : gmdate('Y-m-d', strtotime('-1 day', time()));
-    }
-
-    /**
-     * Parse --asOf as a UTC datetime into epoch-ms for the 4h scan. Empty =>
-     * null (engine uses the latest completed 4h boundary). Accepts a date
-     * ('2026-05-07') or a full datetime ('2026-05-07 16:00').
-     */
-    private function resolveAsOfMs(): ?int
-    {
-        if ($this->asOf === '') {
-            return null;
-        }
-        $ts = strtotime($this->asOf . ' UTC');
-        return $ts === false ? null : $ts * 1000;
+        return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
     }
 }

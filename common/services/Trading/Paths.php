@@ -15,11 +15,6 @@ use Yii;
  */
 final class Paths
 {
-    public static function dataDir(): string
-    {
-        return self::resolve('dataDir', '@common/data');
-    }
-
     public static function historyPricesDir(): string
     {
         return self::resolve('historyDir', '@common/data/history_prices');
@@ -54,34 +49,9 @@ final class Paths
         return self::historyPricesDir() . '/_instruments_index.json';
     }
 
-    public static function openPositions(): string
-    {
-        return self::stateDir() . '/open_positions.jsonl';
-    }
-
-    public static function closedPositions(): string
-    {
-        return self::stateDir() . '/closed_positions.jsonl';
-    }
-
-    public static function signalLog(): string
-    {
-        return self::stateDir() . '/signal_log.jsonl';
-    }
-
     public static function fetchState(): string
     {
         return self::stateDir() . '/fetch_state.json';
-    }
-
-    public static function uiSettings(): string
-    {
-        return self::stateDir() . '/ui_settings.json';
-    }
-
-    public static function lockFile(string $name): string
-    {
-        return self::stateDir() . "/{$name}.lock";
     }
 
     private static function resolve(string $key, string $fallback): string

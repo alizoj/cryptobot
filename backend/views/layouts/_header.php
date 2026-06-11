@@ -17,15 +17,11 @@ $items = [
     ],
     [
         'label' => Yii::t('app', 'Trading'),
-        'url' => ['/trading/index'],
+        'url' => ['/trading/rsi'],
         'visible' => !Yii::$app->user->isGuest,
         'items' => [
-            ['label' => Yii::t('app', 'Dashboard'), 'url' => ['/trading/index']],
             ['label' => Yii::t('app', 'RSI heatmap'), 'url' => ['/trading/rsi']],
-            ['label' => Yii::t('app', 'Daily scan'), 'url' => ['/trading/scan-preview']],
-            ['label' => Yii::t('app', '4h scan'), 'url' => ['/trading/scan4h-preview']],
             ['label' => Yii::t('app', 'Symbol chart'), 'url' => ['/trading/chart', 'symbol' => 'BTC']],
-            ['label' => Yii::t('app', 'How it works'), 'url' => ['/trading/how-it-works']],
         ],
     ],
     [

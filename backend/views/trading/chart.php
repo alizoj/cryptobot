@@ -56,7 +56,7 @@ $zoomBtn = static function (int $days, int $current) use ($symbol, $entry, $stop
 };
 ?>
 <div class="container py-4">
-    <p><?= Html::a('&laquo; back to dashboard', ['index'], ['class' => 'small']) ?></p>
+    <p><?= Html::a('&laquo; back to RSI heatmap', ['rsi'], ['class' => 'small']) ?></p>
     <h1 class="mb-1"><?= Html::encode($symbol) ?>
         <?php if ($setup): ?>
             <small class="text-muted"><?= Html::encode($setup) ?> &middot;

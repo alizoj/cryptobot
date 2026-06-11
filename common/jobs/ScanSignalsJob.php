@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace common\jobs;
 
-use common\services\Trading\ScanRunner;
+use common\services\Trading\DataFetcher;
 use Yii;
 use yii\base\BaseObject;
 use yii\queue\JobInterface;
@@ -12,18 +12,20 @@ use yii\queue\Queue;
 use yii\queue\RetryableJobInterface;
 
 /**
- * Signal scan as a queue job: refresh prices/derivatives/macro to "now",
- * manage open positions, then scan the daily + 4h setups and broadcast/open
- * fresh signals. This is the queue-native replacement for the old cron jobs.
+ * Hourly data-refresh job: bring prices/derivatives/macro current so the coin
+ * charts and the RSI heatmap stay fresh.
+ *
+ * The signal engine has been removed (a new strategy is being built), so this
+ * job no longer manages positions or scans for setups — it only refreshes the
+ * market data and idles. The class name and the recurring machinery are kept
+ * so the existing queue chain and the dashboard/cron entry points keep working
+ * unchanged.
  *
  * Hourly cadence without cron: when {@see $recurring} is true the job
  * re-enqueues itself with a 1-hour delay in a `finally` block, so the chain
- * survives even a failed scan. Start the chain once with
+ * survives even a failed fetch. Start the chain once with
  * `./yii trading/schedule-hourly`; the Redis driver persists the delayed job,
  * so it also survives a worker restart.
- *
- * The dashboard "Scan now" button and `./yii trading/queue-scan` push this with
- * recurring = false — a one-off run that does not touch the hourly schedule.
  */
 final class ScanSignalsJob extends BaseObject implements JobInterface, RetryableJobInterface
 {
@@ -36,7 +38,7 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
      */
     public const SCHEDULE_GEN_KEY = 'crypto:scan_schedule_gen';
 
-    /** Re-enqueue another scan {@see $intervalSeconds} later (hourly loop). */
+    /** Re-enqueue another refresh {@see $intervalSeconds} later (hourly loop). */
     public bool $recurring = false;
 
     /** Delay before the next recurring run. 3600 = hourly. */
@@ -54,13 +56,15 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
         Yii::info("ScanSignalsJob start (source={$this->source}, recurring=" . ($this->recurring ? '1' : '0') . ')', $tag);
 
         try {
-            $summary = (new ScanRunner())->runHourly(
-                static fn(string $line) => Yii::info($line, $tag),
-            );
-            Yii::info(sprintf(
-                'ScanSignalsJob done — events=%d opened=%d sent=%d',
-                $summary['events'], $summary['opened'], $summary['sent'],
-            ), $tag);
+            $fetcher = new DataFetcher();
+            $results = $fetcher->refreshAll([], static fn(string $line) => Yii::info($line, $tag));
+            $fetcher->recordCheckpoint($results);
+            $ok = 0;
+            foreach ($results as $r) {
+                Yii::info(sprintf('%s %-12s %.1fs %s', $r->ok ? 'OK ' : 'FAIL', $r->step, $r->seconds, $r->summary), $tag);
+                $ok += $r->ok ? 1 : 0;
+            }
+            Yii::info(sprintf('ScanSignalsJob done — data refresh %d/%d ok (signal engine removed, no scan).', $ok, count($results)), $tag);
         } catch (\Throwable $e) {
             // Swallow so the recurring chain is never broken by a transient
             // fetch/network error; the next hourly run retries from scratch.
@@ -101,7 +105,7 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
         }
     }
 
-    /** A full fetch + scan is normally under a minute; the first-ever pull can take several. */
+    /** A full refresh is normally under a minute; the first-ever pull can take several. */
     public function getTtr(): int
     {
         return 1800;
@@ -109,7 +113,7 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
 
     /**
      * No automatic retry: the recurring job already reschedules itself every
-     * hour, and a one-off button run should not silently fire twice.
+     * hour, and a one-off run should not silently fire twice.
      */
     public function canRetry($attempt, $error): bool
     {

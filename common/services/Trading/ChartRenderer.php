@@ -7,7 +7,7 @@ namespace common\services\Trading;
 use Yii;
 
 /**
- * Builds QuickChart (https://quickchart.io) candlestick charts for a signal.
+ * Builds QuickChart (https://quickchart.io) candlestick charts.
  *
  * Used by the Telegram path: we POST a Chart.js financial config to
  * QuickChart's /chart/create endpoint, get back a short render URL, and
@@ -37,30 +37,6 @@ final class ChartRenderer
     private function base(): string
     {
         return rtrim((string)($this->cfg['quickChartBase'] ?? 'https://quickchart.io'), '/');
-    }
-
-    /**
-     * High-level helper: build a chart for one SignalEngine signal and return
-     * a short, Telegram-friendly render URL (or null if it couldn't be made).
-     *
-     * @param array<string, mixed> $signal one element from SignalEngine::scan()
-     * @param list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> $candles full daily series for the symbol
-     */
-    public function urlForSignal(array $signal, array $candles): ?string
-    {
-        if ($candles === []) {
-            return null;
-        }
-        $config = $this->buildConfig(
-            symbol:  (string)$signal['symbol'],
-            setup:   (string)$signal['setup'],
-            side:    (string)$signal['side'],
-            asOf:    (string)$signal['as_of'],
-            entryPx: $signal['entry_px'] ?? ($signal['entry_estimate'] ?? null),
-            stopPx:  isset($signal['stop_px']) ? (float)$signal['stop_px'] : null,
-            candles: $candles,
-        );
-        return $this->createShortUrl($config);
     }
 
     /**

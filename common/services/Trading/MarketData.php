@@ -8,8 +8,8 @@ namespace common\services\Trading;
  * Loaders for the per-symbol JSON files produced by the Fetcher\BybitPriceFetcher
  * and Fetcher\BybitDerivativesFetcher, plus the macro JSONL files.
  *
- * Pulled out of the simulator into a class so SignalEngine can hold one
- * instance and avoid re-decoding files between symbols.
+ * A class so callers can hold one instance and avoid re-decoding files
+ * between symbols.
  */
 final class MarketData
 {
@@ -149,7 +149,7 @@ final class MarketData
 
     /**
      * The last $lookback bars of $interval at/before $asOfMs (newest last) —
-     * a tail read for short indicators (e.g. the DeltaAlignment screener) that
+     * a tail read for short indicators that
      * only need a small window. Unlike {@see intervalCandles} it keys just the
      * window, not the whole series, so it stays cheap on the dense sub-hourly
      * intervals. The full record is still decoded once (and cached by
