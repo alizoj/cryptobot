@@ -40,7 +40,7 @@ $links = [
     </div>
 
     <!-- Navigation cards -->
-    <h2 class="h5 mb-3">Quick links</h2>
+    <h2 class="h5 mb-3"><?= Yii::t('app', 'Quick links') ?></h2>
     <div class="row row-cols-1 row-cols-sm-2 row-cols-lg-4 g-3">
         <?php foreach ($links as $lnk): ?>
             <div class="col">

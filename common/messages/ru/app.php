@@ -19,6 +19,33 @@ return [
     'Login' => 'Войти',
     'Logout ({username})' => 'Выйти ({username})',
 
+    // --- dashboard (/site/index) ---
+    'Dashboard' => 'Панель',
+    'Welcome back, {username}' => 'С возвращением, {username}',
+    'Crypto market monitor — the delta screener, coin charts and the RSI heatmap. A new signal engine is in the works.'
+        => 'Монитор крипторынка — дельта-скринер, графики монет и RSI-карта. Новый сигнальный движок в разработке.',
+    'Open delta screener →' => 'Открыть дельта-скринер →',
+    'Quick links' => 'Быстрые ссылки',
+    'Live SMA15/SMA50 delta screener on 5m/30m/1h/2h — DELTA_ALIGNMENT_SHORT_V1.'
+        => 'Живой скринер дельты SMA15/SMA50 на 5m/30m/1h/2h — DELTA_ALIGNMENT_SHORT_V1.',
+    'Multi-timeframe Wilder RSI(14) across the whole coin universe.'
+        => 'Мультитаймфреймовый Wilder RSI(14) по всему юниверсу монет.',
+    'Interactive candlestick chart for any coin, with multi-coin compare.'
+        => 'Интерактивный свечной график любой монеты со сравнением нескольких монет.',
+
+    // --- symbol chart / comparison (/trading/chart) ---
+    'Chart {symbol}' => 'График {symbol}',
+    'Comparison' => 'Сравнение',
+    'back to RSI heatmap' => 'назад к RSI-карте',
+    '% change since the start of the visible window' => '% изменения от начала видимого окна',
+    'window start' => 'начало окна',
+    'Compare with…' => 'Сравнить с…',
+    'Add to comparison' => 'Добавить к сравнению',
+    'Remove {symbol}' => 'Убрать {symbol}',
+    'Zoom:' => 'Масштаб:',
+    'support' => 'поддержка',
+    'resistance' => 'сопротивление',
+
     // --- DELTA_ALIGNMENT screener (/trading/delta) ---
     'Delta Alignment' => 'Дельта-сигнал',
     'Signal identifier' => 'Идентификатор сигнала',
