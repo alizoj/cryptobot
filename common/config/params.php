@@ -36,5 +36,11 @@ return [
         'historyDir'            => '@common/data/history_prices',
         'macroDir'              => '@common/data/history/macro',
         'stateDir'              => '@common/data/trade_state',
+
+        // Bybit V5 public API host (see Fetcher\BybitHttp). api.bybit.com is
+        // geo-degraded from this box (multi-second responses); the
+        // api.bytick.com mirror serves the same API fast. Override in
+        // params-local.php if a machine prefers the canonical host.
+        'bybitApiBase'          => 'https://api.bytick.com',
     ],
 ];

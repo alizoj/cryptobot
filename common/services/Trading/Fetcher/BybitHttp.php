@@ -21,27 +21,41 @@ final class BybitHttp
     public const RETRY_BACKOFF_SECS = [2, 5, 15, 30];
 
     private string $userAgent;
+    private string $base;
     /** @var callable|null fn(string $message): void — optional progress sink */
     private $log;
 
-    public function __construct(string $userAgent = 'crypto-bot-fetcher-php/1.0', ?callable $log = null)
+    /**
+     * One handle for the client's lifetime so curl keeps the TLS connection
+     * alive between calls — the handshake dominates per-request latency at
+     * our call volumes (a board rebuild is ~150-450 sequential calls).
+     */
+    private ?\CurlHandle $ch = null;
+
+    public function __construct(string $userAgent = 'crypto-bot-fetcher-php/1.0', ?callable $log = null, ?string $base = null)
     {
         $this->userAgent = $userAgent;
         $this->log = $log;
+        // Host is overridable via params (trading.bybitApiBase) so a machine on
+        // a geo-degraded route can point everything at the api.bytick.com
+        // mirror without touching each caller.
+        $base ??= \Yii::$app?->params['trading']['bybitApiBase'] ?? null;
+        $this->base = rtrim($base ?? self::BASE, '/');
     }
 
     /** @param array<string,mixed> $params */
     public function get(string $path, array $params = []): array
     {
-        $url = self::BASE . $path;
+        $url = $this->base . $path;
         if (!empty($params)) {
             $url .= '?' . http_build_query($params);
         }
 
         $lastErr = null;
         for ($attempt = 0; $attempt < self::MAX_RETRIES; $attempt++) {
-            $ch = curl_init($url);
+            $ch = $this->ch ??= curl_init();
             curl_setopt_array($ch, [
+                CURLOPT_URL            => $url,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT        => 30,
                 CURLOPT_CONNECTTIMEOUT => 10,
@@ -52,9 +66,10 @@ final class BybitHttp
             $body    = curl_exec($ch);
             $status  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
             $curlErr = curl_error($ch);
-            curl_close($ch);
 
             if ($body === false) {
+                curl_close($ch);
+                $this->ch = null;   // connection is suspect — handshake fresh on retry
                 $lastErr = $curlErr;
                 $wait = self::RETRY_BACKOFF_SECS[min($attempt, count(self::RETRY_BACKOFF_SECS) - 1)];
                 $this->emit("   network error ($curlErr), sleeping {$wait}s ...");

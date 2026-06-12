@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace backend\controllers;
 
 use common\services\Trading\CoinMetrics;
+use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
 use Yii;
 use yii\filters\AccessControl;
@@ -18,9 +19,12 @@ use yii\web\Response;
  * The signal engine (dashboard, scans, positions) has been removed — a new
  * strategy is being built. What's left is the read-only market views:
  *
- *   /trading            redirects to the RSI heatmap
- *   /trading/rsi        multi-timeframe RSI heatmap over the whole universe
- *   /trading/chart      interactive candlestick for a symbol
+ *   /trading               redirects to the RSI heatmap
+ *   /trading/rsi           multi-timeframe RSI heatmap over the whole universe
+ *   /trading/chart         interactive candlestick for a symbol
+ *   /trading/delta         DELTA_ALIGNMENT_SHORT_V1 live screener
+ *   /trading/delta-ticks   JSON poll target feeding the screener (~1 Hz)
+ *   /trading/delta-signal  spec-shaped bot response for one symbol
  */
 final class TradingController extends Controller
 {
@@ -176,14 +180,84 @@ final class TradingController extends Controller
     }
 
     /**
-     * Interactive candlestick chart for one symbol (TradingView Lightweight
-     * Charts). Entry/stop/side/setup are passed via query string so price lines
-     * can be drawn for any external signal source.
+     * DELTA_ALIGNMENT_SHORT_V1 screener — live SMA15/SMA50 deltas on
+     * 5m/30m/1h/2h, computed from the live price + the closed-candle sums the
+     * 5-minute board cron maintains (./yii trading/delta-board). The page
+     * renders once with current values and then polls delta-ticks every second.
+     */
+    public function actionDelta(): string
+    {
+        $svc   = new DeltaAlignment();
+        $board = $svc->loadBoard();
+        $rows  = $board !== null ? $svc->computeRows($board, $svc->lastPrices($board)) : [];
+
+        return $this->render('delta', [
+            'rows'         => $rows,
+            'boardUpdated' => $board !== null ? (int)$board['updated'] : null,
+            'meta'         => DeltaAlignment::META,
+        ]);
+    }
+
+    /** JSON poll target for the delta screener: live prices folded into the board. */
+    public function actionDeltaTicks(): Response
+    {
+        $svc   = new DeltaAlignment();
+        $board = $svc->loadBoard();
+        if ($board === null) {
+            return $this->asJson(['ok' => false, 'error' => 'board-missing']);
+        }
+        return $this->asJson([
+            'ok'            => true,
+            'now'           => time(),
+            'board_updated' => (int)$board['updated'],
+            'rows'          => $svc->computeRows($board, $svc->lastPrices($board)),
+        ]);
+    }
+
+    /**
+     * The bot-facing response from the signal spec, for one symbol:
      *
+     *   /trading/delta-signal?symbol=BTC
+     *   -> {"signal":"DELTA_ALIGNMENT_SHORT_V1","active":true,"bias":"SHORT",...}
+     */
+    public function actionDeltaSignal(string $symbol): Response
+    {
+        $symbol = strtoupper($symbol);
+        $svc    = new DeltaAlignment();
+        $board  = $svc->loadBoard();
+        if ($board === null) {
+            throw new NotFoundHttpException('Delta board not built yet — run ./yii trading/delta-board first.');
+        }
+        foreach ($svc->computeRows($board, $svc->lastPrices($board)) as $row) {
+            if ($row['symbol'] === $symbol || $row['bybit'] === $symbol) {
+                return $this->asJson(DeltaAlignment::specResponse($row));
+            }
+        }
+        throw new NotFoundHttpException("Unknown symbol {$symbol}.");
+    }
+
+    /** Compared coins are capped to the view's line-color palette. */
+    private const COMPARE_MAX = 8;
+
+    /**
+     * Interactive candlestick chart for one coin — or a rebased multi-coin
+     * comparison (TradingView Lightweight Charts). Entry/stop/side/setup are
+     * passed via query string so price lines can be drawn for any external
+     * signal source.
+     *
+     *   /trading/chart                       BTC by default
+     *   /trading/chart?symbol=SOL&zoom=60
      *   /trading/chart?symbol=BTC&entry=65000&stop=62000&side=long&setup=L1&asOf=2026-05-26
+     *
+     * Passing several coins switches to compare mode: each close is rebased to
+     * its % change since the start of the visible window, so coins with very
+     * different prices share one axis.
+     *
+     *   /trading/chart?symbols=BTC,ETH,SOL&zoom=90
      */
     public function actionChart(
-        string $symbol,
+        ?string $symbol = null,
+        ?string $symbols = null,
         ?string $entry = null,
         ?string $stop = null,
         ?string $side = null,
@@ -191,8 +265,25 @@ final class TradingController extends Controller
         ?string $asOf = null,
         int $zoom = 90,
     ): string {
-        $symbol  = strtoupper($symbol);
-        $candles = (new MarketData())->dailyCandles($symbol);
+        $md   = new MarketData();
+        $all  = $md->listSymbols();
+        $zoom = max(14, min(365, $zoom));
+
+        $requested = $symbols !== null && trim($symbols) !== ''
+            ? (preg_split('/[,\s]+/', strtoupper($symbols), -1, PREG_SPLIT_NO_EMPTY) ?: [])
+            : [strtoupper(trim((string)$symbol) !== '' ? trim((string)$symbol) : 'BTC')];
+        $picked = array_values(array_intersect(array_unique($requested), $all));
+        if ($picked === []) {
+            throw new NotFoundHttpException('No daily candles for ' . implode(', ', $requested) . '.');
+        }
+        $picked = array_slice($picked, 0, self::COMPARE_MAX);
+
+        if (count($picked) > 1) {
+            return $this->renderCompare($md, $picked, $all, $zoom);
+        }
+
+        $symbol  = $picked[0];
+        $candles = $md->dailyCandles($symbol);
         if ($candles === []) {
             throw new NotFoundHttpException("No daily candles for {$symbol}.");
         }
@@ -209,9 +300,8 @@ final class TradingController extends Controller
             ];
         }
 
-        // Default visible window = last $zoom days (clamped to [14, 365]) so
-        // candles render at a useful size; older bars stay scrollable.
-        $zoom = max(14, min(365, $zoom));
+        // Default visible window = last $zoom days so candles render at a
+        // useful size; older bars stay scrollable.
         $lastTs    = (int)$series[count($series) - 1]['time'];
         $visibleFrom = $lastTs - $zoom * 86400;
         $visibleTo   = $lastTs + 5 * 86400;  // small right-side padding
@@ -221,7 +311,11 @@ final class TradingController extends Controller
         [$support, $resistance] = self::supportResistance($series, $zoom + 30);
 
         return $this->render('chart', [
-            'symbol' => $symbol,
+            'mode'       => 'single',
+            'symbol'     => $symbol,
+            'symbols'    => [$symbol],
+            'allSymbols' => $all,
+            'compare'    => [],
             'series' => $series,
             'entry'  => $entry !== null && $entry !== '' ? (float)$entry : null,
             'stop'   => $stop  !== null && $stop  !== '' ? (float)$stop  : null,
@@ -233,6 +327,68 @@ final class TradingController extends Controller
             'visibleTo'   => $visibleTo,
             'support'     => $support,
             'resistance'  => $resistance,
+        ]);
+    }
+
+    /**
+     * Compare mode: one line per coin, every close rebased to its % change
+     * since the start of the visible window (coins listed mid-window rebase to
+     * their first candle), so any mix of prices shares one percentage axis.
+     *
+     * @param list<string> $picked validated coin tickers (2+)
+     * @param list<string> $all the full universe, for the add-coin picker
+     */
+    private function renderCompare(MarketData $md, array $picked, array $all, int $zoom): string
+    {
+        $loaded = [];
+        $lastTs = 0;
+        foreach ($picked as $sym) {
+            $candles = $md->dailyCandles($sym);
+            if ($candles === []) {
+                continue;
+            }
+            $closes = [];
+            foreach ($candles as $c) {
+                $closes[] = [intdiv((int)$c['ts'], 1000), (float)$c['c']];
+            }
+            $loaded[$sym] = $closes;
+            $lastTs = max($lastTs, $closes[count($closes) - 1][0]);
+        }
+        if ($loaded === []) {
+            throw new NotFoundHttpException('No daily candles for ' . implode(', ', $picked) . '.');
+        }
+        $visibleFrom = $lastTs - $zoom * 86400;
+        $visibleTo   = $lastTs + 5 * 86400;
+
+        $compare = [];
+        foreach ($loaded as $sym => $closes) {
+            $anchor = null;
+            foreach ($closes as [$ts, $close]) {
+                if ($ts >= $visibleFrom && $close > 0) {
+                    $anchor = $close;
+                    break;
+                }
+            }
+            $anchor ??= ($closes[0][1] > 0 ? $closes[0][1] : 1.0);
+            $data = [];
+            foreach ($closes as [$ts, $close]) {
+                $data[] = ['time' => $ts, 'value' => round(($close / $anchor - 1) * 100, 4)];
+            }
+            $compare[] = ['symbol' => $sym, 'data' => $data];
+        }
+
+        return $this->render('chart', [
+            'mode'        => 'compare',
+            'symbol'      => array_key_first($loaded),
+            'symbols'     => array_keys($loaded),
+            'allSymbols'  => $all,
+            'compare'     => $compare,
+            'zoom'        => $zoom,
+            'visibleFrom' => $visibleFrom,
+            'visibleTo'   => $visibleTo,
+            // single-mode extras, empty so the view template stays uniform
+            'series' => [], 'entry' => null, 'stop' => null, 'side' => null,
+            'setup' => null, 'asOf' => null, 'support' => [], 'resistance' => [],
         ]);
     }
 

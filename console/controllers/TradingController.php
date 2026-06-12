@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace console\controllers;
 
+use common\jobs\DeltaBoardJob;
 use common\jobs\ScanSignalsJob;
 use common\services\Trading\ChartRenderer;
 use common\services\Trading\DataFetcher;
+use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
 use common\services\Trading\TelegramNotifier;
 use Yii;
@@ -23,6 +25,8 @@ use yii\helpers\Console;
  * real work so the coin charts and the RSI heatmap stay current.
  *
  *   ./yii trading/fetch-data          — refresh prices, derivs, dominance, FNG
+ *   ./yii trading/delta-board         — rebuild the DELTA_ALIGNMENT board (run every 5 min)
+ *   ./yii trading/schedule-delta      — start the candle-aligned 5-min board loop (queue)
  *   ./yii trading/scan                — no-op stub (signal engine removed)
  *   ./yii trading/scan-4h             — no-op stub (signal engine removed)
  *   ./yii trading/manage-positions    — no-op stub (signal engine removed)
@@ -78,6 +82,60 @@ final class TradingController extends Controller
             $allOk = $allOk && $r->ok;
         }
         return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+    }
+
+    /**
+     * Rebuild the DELTA_ALIGNMENT board — closed-candle SMA15/SMA50 sums per
+     * symbol and timeframe (5m/30m/1h/2h), consumed live by /trading/delta.
+     * Run it every 5 minutes (OS scheduler), or start the queue-native loop
+     * with {@see actionScheduleDelta} instead.
+     *
+     *   ./yii trading/delta-board
+     */
+    public function actionDeltaBoard(): int
+    {
+        $this->stdout("[delta-board] " . gmdate('c') . "\n", Console::FG_GREEN);
+        try {
+            $sum = (new DeltaAlignment())->rebuildBoard(fn(string $line) => $this->stdout("    $line\n"));
+        } catch (\Throwable $e) {
+            $this->stderr("FAILED: {$e->getMessage()}\n", Console::FG_RED);
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
+        $this->stdout(sprintf(
+            "  OK   %d symbols  %d kline calls (%d reused)  %d failed  %.1fs\n",
+            $sum['symbols'],
+            $sum['calls'],
+            $sum['reused'],
+            $sum['failed'],
+            $sum['seconds'],
+        ), $sum['failed'] === 0 ? Console::FG_GREEN : Console::FG_YELLOW);
+        return ExitCode::OK;
+    }
+
+    /**
+     * Start (or restart) the 5-minute DELTA_ALIGNMENT board loop — the same
+     * queue-native, generation-tokened machinery as schedule-hourly, but each
+     * run lands just after a 5m candle closes so the board stays in lockstep
+     * with the exchange.
+     *
+     *   ./yii trading/schedule-delta         # start/restart the loop
+     *   ./yii queue/listen --verbose=1       # worker that runs the jobs
+     */
+    public function actionScheduleDelta(int $intervalSeconds = 300): int
+    {
+        $gen = (int)Yii::$app->redis->incr(DeltaBoardJob::SCHEDULE_GEN_KEY);
+        $id = Yii::$app->queue->push(new DeltaBoardJob([
+            'recurring'       => true,
+            'intervalSeconds' => $intervalSeconds,
+            'source'          => 'schedule',
+            'scheduleGen'     => $gen,
+        ]));
+        $this->stdout("started delta-board loop (boundary={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
+        if ($gen > 1) {
+            $this->stdout("Superseded the previous chain — older loops stop after their next run.\n", Console::FG_YELLOW);
+        }
+        $this->stdout("Run the worker to process it: ./yii queue/listen --verbose=1\n");
+        return ExitCode::OK;
     }
 
     // ---------- signal stubs (engine removed, new logic pending) ----------
