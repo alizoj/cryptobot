@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace common\jobs;
 
 use common\services\Trading\DataFetcher;
+use common\services\Trading\Paths;
 use Yii;
 use yii\base\BaseObject;
 use yii\queue\JobInterface;
@@ -50,6 +51,13 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
     /** Where this run came from — for the log only ('dashboard', 'schedule', 'cli'). */
     public string $source = 'cli';
 
+    /**
+     * Skip the macro (dominance + FNG) HTTP pull unless the stored copy is older
+     * than this. Those series update once a day, so 12h keeps them effectively
+     * current while sparing the unofficial endpoints on a sub-hourly loop.
+     */
+    private const MACRO_MAX_AGE_SEC = 12 * 3600;
+
     public function execute($queue): void
     {
         $tag = 'trading.scan';
@@ -57,7 +65,22 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
 
         try {
             $fetcher = new DataFetcher();
-            $results = $fetcher->refreshAll([], static fn(string $line) => Yii::info($line, $tag));
+            $log = static fn(string $line) => Yii::info($line, $tag);
+            // Prices + derivatives are incremental and skip cheaply when no bar
+            // has closed (a few hundred ms of disk reads, no HTTP), so they are
+            // safe to run on a sub-hourly loop. Macro (BTC dominance + Fear &
+            // Greed) is a once-a-day series whose fetchers make a live HTTP call
+            // on *every* run (unofficial CMC endpoint + alternative.me), so we
+            // only pull it when the stored copy is stale — otherwise a 60s loop
+            // would hammer those free endpoints ~1,440×/day. The RSI heatmap
+            // uses none of the macro data; this keeps the minute loop cheap.
+            $results = array_merge(
+                $fetcher->refreshPrices([], $log),
+                $fetcher->refreshDerivatives([], $log),
+            );
+            if (self::macroStale(self::MACRO_MAX_AGE_SEC)) {
+                $results = array_merge($results, $fetcher->refreshMacro([], $log));
+            }
             $fetcher->recordCheckpoint($results);
             $ok = 0;
             foreach ($results as $r) {
@@ -92,6 +115,16 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
                 }
             }
         }
+    }
+
+    /** True if the macro series is missing or older than $maxAgeSec (uses the dominance file's mtime as the proxy). */
+    private static function macroStale(int $maxAgeSec): bool
+    {
+        $file = Paths::dominanceFile();
+        if (!is_file($file)) {
+            return true;
+        }
+        return (time() - (int)filemtime($file)) > $maxAgeSec;
     }
 
     /** Current recurring-chain generation from Redis, or null if untracked/unreadable. */
