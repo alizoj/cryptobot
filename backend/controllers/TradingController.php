@@ -47,34 +47,44 @@ final class TradingController extends Controller
     }
 
     /**
-     * Coin listing with multi-timeframe aggregated RSI — a Bybit-only revival of
-     * the rsi-module heatmap. Each coin shows Wilder RSI(14) on 1h/4h/1d/1w plus
-     * a weight-blended "aggregated" RSI (longer TFs weighted higher). The board
-     * is cached to runtime so the page is snappy; ?refresh=1 forces a recompute.
+     * Coin listing with multi-timeframe RSI — a Bybit-only revival of the
+     * rsi-module heatmap. Each coin shows Wilder RSI(14) on 1d/4h/1h/15m. The
+     * board is cached to runtime so the page is snappy; ?refresh=1 forces a
+     * recompute.
+     *
+     * The default sort ('tiered') ranks rows by their overbought/oversold
+     * condition hierarchically — 1D first, then 4H, 1H, 15m — with oversold at
+     * the top (see {@see tieredCmp}). Clicking a column header sorts by that one
+     * column instead.
      *
      *   /trading/rsi
      *   /trading/rsi?sort=1h&dir=desc
      *   /trading/rsi?refresh=1
      */
-    public function actionRsi(string $sort = 'agg', string $dir = 'asc', int $refresh = 0): string
+    public function actionRsi(string $sort = 'tiered', string $dir = 'asc', int $refresh = 0): string
     {
         $board = $this->rsiBoard((bool)$refresh);
         $rows  = $board['rows'];
 
-        $allowed = ['symbol', 'price', 'chg24h', 'agg', '1h', '4h', '1d', '1w', 'turnover20'];
+        $allowed = ['tiered', 'symbol', 'price', 'chg24h', '1h', '4h', '1d', '15m', 'turnover20'];
         if (!in_array($sort, $allowed, true)) {
-            $sort = 'agg';
+            $sort = 'tiered';
         }
         $mul = $dir === 'desc' ? -1 : 1;
-        $val = static fn(array $r) => in_array($sort, ['1h', '4h', '1d', '1w'], true) ? ($r['rsi'][$sort] ?? null) : ($r[$sort] ?? null);
-        usort($rows, static function (array $a, array $b) use ($val, $mul, $sort): int {
-            $va = $val($a);
-            $vb = $val($b);
-            if ($va === null && $vb === null) return 0;
-            if ($va === null) return 1;   // nulls always last
-            if ($vb === null) return -1;
-            return $mul * ($sort === 'symbol' ? strcmp((string)$va, (string)$vb) : ($va <=> $vb));
-        });
+
+        if ($sort === 'tiered') {
+            usort($rows, static fn(array $a, array $b): int => $mul * self::tieredCmp($a, $b));
+        } else {
+            $val = static fn(array $r) => in_array($sort, self::RSI_TFS, true) ? ($r['rsi'][$sort] ?? null) : ($r[$sort] ?? null);
+            usort($rows, static function (array $a, array $b) use ($val, $mul, $sort): int {
+                $va = $val($a);
+                $vb = $val($b);
+                if ($va === null && $vb === null) return 0;
+                if ($va === null) return 1;   // nulls always last
+                if ($vb === null) return -1;
+                return $mul * ($sort === 'symbol' ? strcmp((string)$va, (string)$vb) : ($va <=> $vb));
+            });
+        }
 
         return $this->render('rsi', [
             'rows'    => $rows,
@@ -85,8 +95,59 @@ final class TradingController extends Controller
         ]);
     }
 
-    /** Timeframe label => aggregation weight (longer TF = more weight). */
-    private const RSI_TFS = ['1h' => 1.0, '4h' => 1.6, '1d' => 2.4, '1w' => 3.0];
+    /** Timeframes shown on the heatmap, in sort-hierarchy order (1D dominant → 15m). */
+    private const RSI_TFS = ['1d', '4h', '1h', '15m'];
+
+    /** RSI thresholds for the overbought/oversold buckets used by the tiered sort. */
+    private const RSI_OVERSOLD = 30.0;
+    private const RSI_OVERBOUGHT = 70.0;
+
+    /** Bucket one RSI value: 0 = oversold, 1 = neutral, 2 = overbought, 3 = missing. */
+    private static function rsiTier(?float $v): int
+    {
+        if ($v === null) {
+            return 3;
+        }
+        if ($v <= self::RSI_OVERSOLD) {
+            return 0;
+        }
+        if ($v >= self::RSI_OVERBOUGHT) {
+            return 2;
+        }
+        return 1;
+    }
+
+    /**
+     * Default board ordering: compare the overbought/oversold tier on each
+     * timeframe in hierarchy order (1D, then 4H, 1H, 15m). The first timeframe
+     * whose tiers differ decides — oversold (tier 0) sorts to the top, then
+     * neutral, then overbought; rows missing a timeframe sink below. When every
+     * tier matches, fall back to the raw 1D RSI (more oversold first) and then
+     * the symbol for a stable order.
+     */
+    private static function tieredCmp(array $a, array $b): int
+    {
+        foreach (self::RSI_TFS as $tf) {
+            $ta = self::rsiTier(self::numOrNull($a['rsi'][$tf] ?? null));
+            $tb = self::rsiTier(self::numOrNull($b['rsi'][$tf] ?? null));
+            if ($ta !== $tb) {
+                return $ta <=> $tb;
+            }
+        }
+        $ra = self::numOrNull($a['rsi']['1d'] ?? null);
+        $rb = self::numOrNull($b['rsi']['1d'] ?? null);
+        if ($ra !== $rb) {
+            if ($ra === null) return 1;
+            if ($rb === null) return -1;
+            return $ra <=> $rb;   // ascending: more oversold first
+        }
+        return strcmp((string)$a['symbol'], (string)$b['symbol']);
+    }
+
+    private static function numOrNull(mixed $v): ?float
+    {
+        return is_numeric($v) ? (float)$v : null;
+    }
 
     /**
      * Build (or load from a 15-min runtime cache) the per-coin RSI board over
@@ -115,20 +176,11 @@ final class TradingController extends Controller
                 continue;
             }
             $rsi = [
-                '1h' => self::rsiOf($md->hourlyCandles($sym)),
-                '4h' => self::rsiOf($md->fourHourCandles($sym)),
-                '1d' => self::rsiOf($daily),
-                '1w' => self::rsiOf($md->weeklyCandles($sym)),
+                '1d'  => self::rsiOf($daily),
+                '4h'  => self::rsiOf($md->fourHourCandles($sym)),
+                '1h'  => self::rsiOf($md->hourlyCandles($sym)),
+                '15m' => self::rsiOf($md->fifteenMinCandles($sym)),
             ];
-            $acc = 0.0;
-            $wsum = 0.0;
-            foreach (self::RSI_TFS as $tf => $w) {
-                if (is_numeric($rsi[$tf])) {
-                    $acc += $w * $rsi[$tf];
-                    $wsum += $w;
-                }
-            }
-            $agg = $wsum > 0 ? $acc / $wsum : null;
 
             $last  = end($daily);
             $prev  = $daily[count($daily) - 2] ?? null;
@@ -143,7 +195,6 @@ final class TradingController extends Controller
                 'turnover20' => $turn20,
                 'tradeable'  => $turn20 !== null && $turn20 >= 5_000_000,
                 'rsi'        => $rsi,
-                'agg'        => $agg !== null ? round($agg, 1) : null,
             ];
             $md->forgetSymbol();
         }

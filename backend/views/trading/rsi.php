@@ -7,7 +7,7 @@ declare(strict_types=1);
 /** @var int $updated */
 /** @var string $sort */
 /** @var string $dir */
-/** @var array<string, float> $tfs */
+/** @var list<string> $tfs */
 
 use yii\helpers\Html;
 
@@ -83,13 +83,15 @@ $agoStr = $ago < 60 ? "{$ago}s" : ($ago < 3600 ? floor($ago / 60) . 'm' : floor(
             overbought
         </span>
         <span class="text-secondary small">updated <?= $agoStr ?> ago</span>
+        <?= Html::a('↕ RSI tiers', ['rsi', 'sort' => 'tiered', 'dir' => 'asc'], ['class' => 'btn btn-sm ' . ($sort === 'tiered' ? 'btn-secondary' : 'btn-outline-secondary'), 'title' => 'Default sort: oversold→overbought, tiered 1D→15m']) ?>
         <?= Html::a('↻ Refresh', ['rsi', 'refresh' => 1, 'sort' => $sort, 'dir' => $dir], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
     </div>
 </div>
 
 <p class="text-secondary small mb-2">
-    Wilder RSI(14) per timeframe, Bybit data. <strong>AGG</strong> = weighted blend
-    (1h&times;1.0, 4h&times;1.6, 1d&times;2.4, 1w&times;3.0). Sorted oversold &rarr; overbought by default.
+    Wilder RSI(14) per timeframe, Bybit data. Default sort tiers each coin by its
+    overbought (&ge;70) / oversold (&le;30) state hierarchically &mdash; 1D first, then
+    4H, 1H, 15m &mdash; with <strong>oversold on top</strong>. Click any column to sort by it.
 </p>
 
 <div class="card card-section">
@@ -100,11 +102,10 @@ $agoStr = $ago < 60 ? "{$ago}s" : ($ago < 3600 ? floor($ago / 60) . 'm' : floor(
                     <?= $th('symbol', 'Coin', 'start') ?>
                     <?= $th('price', 'Price', 'end') ?>
                     <?= $th('chg24h', '24h', 'end') ?>
-                    <?= $th('1h', '1h') ?>
-                    <?= $th('4h', '4h') ?>
                     <?= $th('1d', '1d') ?>
-                    <?= $th('1w', '1w') ?>
-                    <?= $th('agg', 'AGG') ?>
+                    <?= $th('4h', '4h') ?>
+                    <?= $th('1h', '1h') ?>
+                    <?= $th('15m', '15m') ?>
                     <?= $th('turnover20', 'Turnover', 'end') ?>
                     <th class="text-center"></th>
                 </tr>
@@ -120,11 +121,10 @@ $agoStr = $ago < 60 ? "{$ago}s" : ($ago < 3600 ? floor($ago / 60) . 'm' : floor(
                     </td>
                     <td class="text-end num"><?= $fmtPx((float)$r['price']) ?></td>
                     <?= $chgCell($r['chg24h'] !== null ? (float)$r['chg24h'] : null) ?>
-                    <?= $rsiCell($r['rsi']['1h']) ?>
+                    <?= $rsiCell($r['rsi']['1d'], true) ?>
                     <?= $rsiCell($r['rsi']['4h']) ?>
-                    <?= $rsiCell($r['rsi']['1d']) ?>
-                    <?= $rsiCell($r['rsi']['1w']) ?>
-                    <?= $rsiCell($r['agg'], true) ?>
+                    <?= $rsiCell($r['rsi']['1h']) ?>
+                    <?= $rsiCell($r['rsi']['15m']) ?>
                     <td class="text-end num text-secondary"><?= $turnover($r['turnover20'] !== null ? (float)$r['turnover20'] : null) ?></td>
                     <td class="text-center">
                         <?= Html::a('📈', ['chart', 'symbol' => $r['symbol']], ['class' => 'text-decoration-none', 'target' => '_blank', 'title' => 'Open chart']) ?>
@@ -132,7 +132,7 @@ $agoStr = $ago < 60 ? "{$ago}s" : ($ago < 3600 ? floor($ago / 60) . 'm' : floor(
                 </tr>
             <?php endforeach ?>
             <?php if ($rows === []): ?>
-                <tr><td colspan="10" class="text-center text-muted py-4">No coin data. Run <code>./yii trading/fetch-data</code> first.</td></tr>
+                <tr><td colspan="9" class="text-center text-muted py-4">No coin data. Run <code>./yii trading/fetch-data</code> first.</td></tr>
             <?php endif ?>
             </tbody>
         </table>

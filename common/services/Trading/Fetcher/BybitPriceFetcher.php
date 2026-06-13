@@ -10,13 +10,14 @@ use Throwable;
 use Yii;
 
 /**
- * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 5m by default)
- * for every HashHedge-listed symbol from the Bybit V5 public API and write them
- * out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/5m intervals are
- * kept for short multi-timeframe indicators.
+ * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 15m, 5m by
+ * default) for every HashHedge-listed symbol from the Bybit V5 public API and
+ * write them out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/15m/5m
+ * intervals are kept for short multi-timeframe indicators (15m feeds the RSI
+ * heatmap's lowest timeframe).
  *
  * Lifetime history is fetched for 1h-and-longer intervals; sub-hourly ones
- * (30m/5m) backfill only a recent window ({@see backfillStartMs}) — crawling
+ * (30m/15m/5m) backfill only a recent window ({@see backfillStartMs}) — crawling
  * them from a 2018 launch would blow past the KLINE page cap and never reach
  * the present.
  *
@@ -30,7 +31,7 @@ final class BybitPriceFetcher
 {
     public const KLINE_LIMIT = 1000;
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000; // 2018-01-01 UTC
-    public const DEFAULT_INTERVALS = ['D', 'W', '4h', '2h', '1h', '30m', '5m'];
+    public const DEFAULT_INTERVALS = ['D', 'W', '4h', '2h', '1h', '30m', '15m', '5m'];
 
     /**
      * Recent-window size, in bars, for sub-hourly backfills (see

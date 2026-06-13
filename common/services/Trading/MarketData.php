@@ -141,6 +141,12 @@ final class MarketData
         return $this->intervalCandles($symbol, '4h');
     }
 
+    /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> 15-minute (interval 15m) */
+    public function fifteenMinCandles(string $symbol): array
+    {
+        return $this->intervalCandles($symbol, '15m');
+    }
+
     /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> weekly (interval W) */
     public function weeklyCandles(string $symbol): array
     {
