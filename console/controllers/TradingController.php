@@ -37,6 +37,7 @@ use yii\helpers\Console;
  *   ./yii trading/test-chart SYMBOL   — render a candlestick chart and send it
  *   ./yii trading/queue-scan          — push a one-off data refresh onto the queue
  *   ./yii trading/schedule-hourly     — start the hourly self-rescheduling refresh loop
+ *   ./yii trading/schedule-refresh    — start the refresh loop at any interval (default 60s)
  */
 final class TradingController extends Controller
 {
@@ -271,6 +272,41 @@ final class TradingController extends Controller
      */
     public function actionScheduleHourly(int $intervalSeconds = 3600): int
     {
+        return $this->startRefreshLoop($intervalSeconds);
+    }
+
+    /**
+     * Start (or restart) the data-refresh loop at an arbitrary interval — the
+     * same queue-native, self-rescheduling chain as schedule-hourly, just with a
+     * sensible sub-hourly default. The recurring ScanSignalsJob refreshes prices
+     * + derivatives every run (each skips cheaply with no API call when no bar
+     * has closed) and lets the macro series refresh on its own 12h gate, so a
+     * minute loop stays cheap and never hammers the unofficial dominance/FNG
+     * endpoints.
+     *
+     * Like schedule-hourly it bumps a Redis generation token, so re-running it
+     * supersedes any existing chain (hourly or otherwise) — no need to clear the
+     * queue first.
+     *
+     *   ./yii trading/schedule-refresh        # every 60s (default)
+     *   ./yii trading/schedule-refresh 300    # every 5 min (aligns with the 5m floor)
+     *   ./yii queue/listen --verbose=1        # worker that runs the jobs
+     */
+    public function actionScheduleRefresh(int $intervalSeconds = 60): int
+    {
+        return $this->startRefreshLoop($intervalSeconds);
+    }
+
+    /**
+     * Push one recurring ScanSignalsJob that re-enqueues itself $intervalSeconds
+     * after each run finishes. Shared by schedule-hourly and schedule-refresh.
+     */
+    private function startRefreshLoop(int $intervalSeconds): int
+    {
+        if ($intervalSeconds < 1) {
+            $this->stderr("intervalSeconds must be >= 1.\n", Console::FG_RED);
+            return ExitCode::USAGE;
+        }
         $gen = (int)Yii::$app->redis->incr(ScanSignalsJob::SCHEDULE_GEN_KEY);
         $id = Yii::$app->queue->push(new ScanSignalsJob([
             'recurring'       => true,
@@ -278,7 +314,7 @@ final class TradingController extends Controller
             'source'          => 'schedule',
             'scheduleGen'     => $gen,
         ]));
-        $this->stdout("started hourly refresh loop (interval={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
+        $this->stdout("started refresh loop (interval={$intervalSeconds}s, gen={$gen}, job id={$id}).\n", Console::FG_GREEN);
         if ($gen > 1) {
             $this->stdout("Superseded the previous chain — older loops stop after their next run.\n", Console::FG_YELLOW);
         }
