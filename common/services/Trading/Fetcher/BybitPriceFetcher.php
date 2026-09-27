@@ -23,9 +23,11 @@ use Yii;
  *
  * Subsequent runs are incremental: per interval, if the last stored bar is
  * older than one period, we re-fetch from that bar's timestamp forward and
- * merge by timestamp (the still-forming bar gets overwritten next run). The
- * writeback preserves any sibling top-level keys (notably the 'derivatives'
- * block written by {@see BybitDerivativesFetcher}).
+ * merge by timestamp (the still-forming bar gets overwritten next run).
+ * Sub-hourly series are then capped back to the same recent window
+ * ({@see retainRows}) so they don't grow without bound. The writeback
+ * preserves any sibling top-level keys (notably the 'derivatives' block
+ * written by {@see BybitDerivativesFetcher}).
  */
 final class BybitPriceFetcher
 {
@@ -35,10 +37,11 @@ final class BybitPriceFetcher
 
     /**
      * Recent-window size, in bars, for sub-hourly backfills (see
-     * {@see backfillStartMs}). SMA50 — the DELTA_ALIGNMENT screener's longest
-     * lookback — needs 50; this keeps generous margin while bounding the
-     * initial fetch to ~6 KLINE pages (must stay <= 50 * KLINE_LIMIT, the
-     * fetchLifetimeKlines page cap).
+     * {@see backfillStartMs}) and the retention cap applied after each
+     * incremental merge (see {@see retainRows}). The longest sub-hourly
+     * lookback is the RSI heatmap's 250 × 15m; this keeps generous margin while
+     * bounding the initial fetch to ~6 KLINE pages (must stay <= 50 *
+     * KLINE_LIMIT, the fetchLifetimeKlines page cap).
      */
     public const SHORT_BACKFILL_BARS = 6000;
 
@@ -214,6 +217,7 @@ final class BybitPriceFetcher
                         );
                         $merged = $this->mergeRowsByTs($existingRows, $fresh);
                         $added  = count($merged) - count($existingRows);
+                        $merged = self::retainRows($label, $merged);
                         $entry = [
                             'schema'        => ['startTime_ms', 'open', 'high', 'low', 'close', 'volume', 'turnover'],
                             'rows'          => $merged,
@@ -375,9 +379,9 @@ final class BybitPriceFetcher
      * 2018 launch to the present, so they start from a recent window of
      * SHORT_BACKFILL_BARS bars instead — enough for the DELTA_ALIGNMENT screener
      * with margin, and bounded to a few API pages. Clamped to $launchMs so a
-     * brand-new listing never asks for bars before it existed. Incremental
-     * refreshes are unaffected: once the first windowed fetch reaches the
-     * present, later runs simply resume from the last stored bar.
+     * brand-new listing never asks for bars before it existed. Once the first
+     * windowed fetch reaches the present, later runs resume from the last
+     * stored bar and {@see retainRows} keeps the series at the same window.
      */
     public static function backfillStartMs(string $label, int $launchMs, int $nowMs): int
     {
@@ -386,6 +390,26 @@ final class BybitPriceFetcher
             return $launchMs;
         }
         return max($launchMs, $nowMs - self::SHORT_BACKFILL_BARS * $period);
+    }
+
+    /**
+     * Cap a merged sub-hourly series to its newest SHORT_BACKFILL_BARS bars;
+     * lifetime (1h and longer) series pass through untouched. Without this,
+     * incremental merges only ever append — the 5m series alone gains ~290
+     * rows a day, and within a few months the per-symbol JSON grew too large
+     * to decode inside the web memory limit (/trading/rsi fataled in
+     * MarketData::loadSymbol).
+     *
+     * @param list<list<mixed>> $rows ascending by ts
+     * @return list<list<mixed>>
+     */
+    public static function retainRows(string $label, array $rows): array
+    {
+        $period = self::INTERVAL_PERIOD_MS[$label] ?? 3_600_000;
+        if ($period >= 3_600_000 || count($rows) <= self::SHORT_BACKFILL_BARS) {
+            return $rows;
+        }
+        return array_slice($rows, -self::SHORT_BACKFILL_BARS);
     }
 
     private function buildIntervalEntry(string $category, string $bybitSymbol, string $label, int $launchMs): array

@@ -170,16 +170,20 @@ final class TradingController extends Controller
         $md = new MarketData();
         $rows = [];
         foreach ($md->listSymbols() as $sym) {
-            $daily = $md->dailyCandles($sym);
+            // Tail reads only: every value below needs at most the last
+            // RSI_LOOKBACK bars, and keying the full lifetime 1h/4h series
+            // instead costs tens of MB per symbol on top of the decoded file.
+            $tail = static fn(string $interval): array => $md->intervalWindowAsOf($sym, $interval, PHP_INT_MAX, self::RSI_LOOKBACK);
+            $daily = $tail('D');
             if (count($daily) < 15) {
                 $md->forgetSymbol();
                 continue;
             }
             $rsi = [
                 '1d'  => self::rsiOf($daily),
-                '4h'  => self::rsiOf($md->fourHourCandles($sym)),
-                '1h'  => self::rsiOf($md->hourlyCandles($sym)),
-                '15m' => self::rsiOf($md->fifteenMinCandles($sym)),
+                '4h'  => self::rsiOf($tail('4h')),
+                '1h'  => self::rsiOf($tail('1h')),
+                '15m' => self::rsiOf($tail('15m')),
             ];
 
             $last  = end($daily);
@@ -204,13 +208,16 @@ final class TradingController extends Controller
         return $out;
     }
 
-    /** Wilder RSI(14) of the last ~250 closes of an OHLCV series, or null. */
+    /** Bars read per timeframe for the RSI board (also covers the 20-day turnover). */
+    private const RSI_LOOKBACK = 250;
+
+    /** Wilder RSI(14) of the last RSI_LOOKBACK closes of an OHLCV series, or null. */
     private static function rsiOf(array $candles): ?float
     {
         if (count($candles) < 15) {
             return null;
         }
-        $closes = array_column(array_slice($candles, -250), 'c');
+        $closes = array_column(array_slice($candles, -self::RSI_LOOKBACK), 'c');
         $r = CoinMetrics::calcRSI($closes);
         return $r !== null ? round($r, 1) : null;
     }
