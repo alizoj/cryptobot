@@ -270,6 +270,16 @@ separate `trading/fetch-data` step — the queue job fetches first, incrementall
 ./yii trading/manage-positions                  # one-off lifecycle pass
 ./yii trading/fetch-data                        # ad-hoc refresh (incremental); the queue job already covers this
 ./yii trading/rsi-board [--force=1]             # rebuild the /trading/rsi board from stored data (no API calls)
+```
+
+> The universe is `common/data/hashhedge_symbols.json` — all HashHedge
+> instruments (crypto + TradFi). Prices come from Bybit (spot, then linear
+> perp); tickers Bybit doesn't list fall back to Binance USD-M futures
+> (`fapi.binance.com` must be reachable from the server). Newly added tickers
+> are backfilled by the refresh loop at most 8 per run, so a big list change
+> fills in over a few runs instead of one job outliving its TTR.
+
+```bash
 ./yii trading/test-telegram                     # verify channel creds
 ./yii trading/test-chart BTC                    # verify the QuickChart -> Telegram image pipeline
 ```

@@ -1,21 +1,30 @@
 {
-  "_comment": "Master list of HashHedge-listed tickers (from https://hashhedge.gitbook.io/hashhedge-user-guide/coins-limit). The Bybit fetcher reads this list and resolves each ticker to a Bybit instrument using bybit_symbol_overrides.json and instrument auto-discovery. Tickers with no Bybit spot pair or no linear perp are pruned from this list.",
+  "_comment": "Master list of HashHedge instruments — all 172 from the crypto_trade project's config/instruments.csv (synced 2026-09-28): 136 crypto + 36 TradFi (metals, energy, ETFs, equities). The price fetcher resolves each ticker on Bybit (spot, then linear perp) via bybit_symbol_overrides.json and instrument auto-discovery; the ones Bybit doesn't list (JOE, SPELL, DODOX, XPT, XPD, COPPER, NATGAS, PAYP, NOK, OPENAI as of this sync) fall back to Binance USD-M futures.",
   "symbols": [
     "BTC", "ETH", "XRP", "SOL", "DOGE", "SHIB", "PEPE", "XAU",
     "BNB", "LTC", "TRX", "ADA", "XLM", "LINK", "BONK", "FLOKI",
     "SUI", "DOT", "UNI", "TAO", "ARB", "WIF", "LDO", "HYPE", "ASTER", "XMR", "ZEC",
-    "BCH", "AVAX", "TON", "JUP", "LIT",
+    "BCH", "AVAX", "JUP", "LIT",
     "HBAR", "APT", "ICP", "ONDO", "ENA", "VET", "SEI", "WLD", "ATOM", "FIL", "FET",
     "TIA", "INJ", "OP", "STX", "IMX", "GRT", "ENS", "CAKE", "SAND",
     "JASMY", "PYTH", "PENDLE", "JTO", "MANA", "RUNE", "RSR", "CFX", "CHZ",
     "APE", "DASH", "BLUR", "COMP", "CYBER", "BIGTIME", "TRB", "ORDI", "MASK",
     "ACE", "ARKM", "CKB", "ENJ", "ID", "ALT", "LPT",
-    "GMT", "MANTA", "ROSE", "XAI", "BOME", "AEVO", "STORJ", "UMA",
+    "GMT", "MANTA", "ROSE", "XAI", "BOME", "AEVO", "UMA",
     "USTC", "ZETA", "PEOPLE", "METIS", "API3", "POLYX", "ZRX", "DUSK",
-    "SSV", "YGG", "EDU", "PORTAL", "AR", "DYM", "ANKR",
-    "XVG", "EGLD", "AUCTION", "LQTY", "SAGA", "GAS", "BEL", "BICO", "NEO",
-    "ONG", "WOO", "STG", "HIGH", "ACH", "MAV", "1INCH", "LSK",
+    "SSV", "YGG", "EDU", "AR", "DYM", "ANKR",
+    "EGLD", "AUCTION", "LQTY", "SAGA", "GAS", "BEL", "BICO", "NEO",
+    "ONG", "WOO", "STG", "ACH", "MAV", "1INCH", "LSK",
     "ILV", "GMX", "IOST", "ETHFI", "W", "CATI", "HMSTR",
-    "BSV", "WLFI", "LINEA", "TNSR"
+    "BSV", "WLFI", "LINEA", "TNSR",
+    "AAVE", "STRK", "TRUMP", "VIRTUAL", "MON", "PUMP", "RATS", "BEAMX",
+    "LAB", "RIVER", "UB", "JOE", "SPELL", "DODOX",
+
+    "XAG", "XPT", "XPD", "COPPER",
+    "CL", "BZ", "NATGAS",
+    "SPY", "QQQ", "EWJ", "EWY",
+    "TSLA", "AAPL", "AMZN", "META", "MSTR", "COIN", "HOOD", "CRCL",
+    "PLTR", "INTC", "MU", "SNDK", "TSM", "QCOM", "SAMSUNG", "SKHYNIX",
+    "AAOI", "AXTI", "LLY", "JPM", "PAYP", "NOK", "OPENAI", "SPCX"
   ]
 }

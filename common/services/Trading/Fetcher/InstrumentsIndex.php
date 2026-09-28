@@ -27,15 +27,45 @@ final class InstrumentsIndex
     }
 
     /**
-     * Load (or refetch) the index. Cached to disk so subsequent runs are free.
+     * Refetch the disk cache once it is older than this. Without it, tickers
+     * listed after the first run never resolve ("no bybit pair") until someone
+     * refreshes the index by hand.
+     */
+    public const MAX_AGE_SEC = 86_400;
+
+    /**
+     * Load (or refetch) the index. Cached to disk (refreshed daily) and in
+     * memory, so repeated resolves within a run are free.
      */
     public function ensureLoaded(bool $forceRefresh = false, ?callable $log = null): array
     {
-        if (!$forceRefresh && is_file($this->cachePath)) {
-            $this->index = json_decode((string)file_get_contents($this->cachePath), true, flags: JSON_THROW_ON_ERROR);
-            $this->loaded = true;
+        if ($this->loaded && !$forceRefresh) {
             return $this->index;
         }
+        $cached = is_file($this->cachePath);
+        if (!$forceRefresh && $cached && time() - (int)filemtime($this->cachePath) < self::MAX_AGE_SEC) {
+            return $this->loadCache();
+        }
+        try {
+            return $this->fetch($log);
+        } catch (\Throwable $e) {
+            if (!$cached) {
+                throw $e;
+            }
+            $log && $log('Instruments index refresh failed (' . $e->getMessage() . ') — using the cached copy');
+            return $this->loadCache();
+        }
+    }
+
+    private function loadCache(): array
+    {
+        $this->index = json_decode((string)file_get_contents($this->cachePath), true, flags: JSON_THROW_ON_ERROR);
+        $this->loaded = true;
+        return $this->index;
+    }
+
+    private function fetch(?callable $log): array
+    {
         $log && $log('Fetching Bybit instruments index (spot + linear) ...');
         $index = ['spot' => [], 'linear' => []];
         foreach (['spot', 'linear'] as $category) {
@@ -56,6 +86,10 @@ final class InstrumentsIndex
                 $this->http->throttle();
             }
             $log && $log("   $category: " . count($index[$category]) . ' instruments');
+            if ($index[$category] === []) {
+                // Never replace a good cache with an empty one — every ticker would stop resolving.
+                throw new \RuntimeException("Bybit returned no {$category} instruments");
+            }
         }
 
         @mkdir(dirname($this->cachePath), 0775, recursive: true);

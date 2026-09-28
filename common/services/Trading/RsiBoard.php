@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace common\services\Trading;
 
+use common\services\Trading\Fetcher\BinanceFutures;
 use common\services\Trading\Fetcher\BybitHttp;
 
 /**
@@ -108,11 +109,15 @@ final class RsiBoard
 
         $md = new MarketData();
         $dir = Paths::historyPricesDir();
+        $universe = self::universe();
         $bases = [];
         $skipped = [];
         $computed = 0;
         $reused = 0;
         foreach ($md->listSymbols() as $sym) {
+            if ($universe !== null && !isset($universe[$sym])) {
+                continue;
+            }
             $mtime = (int)@filemtime("{$dir}/{$sym}.json");
             if (isset($prevBases[$sym]) && (int)($prevBases[$sym]['src_mtime'] ?? -1) === $mtime) {
                 $bases[] = $prevBases[$sym];
@@ -429,8 +434,9 @@ final class RsiBoard
 
     /**
      * Live last price + rolling 24h change (%) for every symbol of the given
-     * categories — one /v5/market/tickers call per category. A category that
-     * fails is skipped; its coins fall back to stored closes.
+     * categories — one tickers call per category: Bybit /v5/market/tickers for
+     * spot/linear, Binance /fapi/v1/ticker/24hr for the USD-M fallback. A
+     * category that fails is skipped; its coins fall back to stored closes.
      *
      * @param list<string> $categories
      * @return array<string, array{price:float, chg24h:?float}> keyed "category:SYMBOL"
@@ -445,6 +451,12 @@ final class RsiBoard
                 $http->throttle();
             }
             try {
+                if ($cat === BinanceFutures::CATEGORY) {
+                    foreach ((new BinanceFutures())->tickers() as $symbol => $quote) {
+                        $out[$cat . ':' . $symbol] = $quote;
+                    }
+                    continue;
+                }
                 $res = $http->get('/v5/market/tickers', ['category' => $cat]);
             } catch (\Throwable $e) {
                 $errors[] = "{$cat}: {$e->getMessage()}";
@@ -464,6 +476,24 @@ final class RsiBoard
             throw new \RuntimeException(implode('; ', $errors));
         }
         return $out;
+    }
+
+    /**
+     * Tickers on the master list, or null when it can't be read (then every
+     * history file is shown). Files of tickers dropped from the list stay on
+     * disk but are no longer refreshed — without this filter they would
+     * linger on the heatmap with frozen prices.
+     *
+     * @return array<string, true>|null
+     */
+    private static function universe(): ?array
+    {
+        $file = Paths::symbolsFile();
+        $data = is_file($file) ? json_decode((string)file_get_contents($file), true) : null;
+        $symbols = $data['symbols'] ?? null;
+        return is_array($symbols) && $symbols !== []
+            ? array_fill_keys(array_map('strtoupper', $symbols), true)
+            : null;
     }
 
     /** 20-day average daily turnover (close × volume). */

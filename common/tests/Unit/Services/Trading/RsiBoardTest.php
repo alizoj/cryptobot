@@ -28,15 +28,16 @@ final class RsiBoardTest extends Unit
         mkdir($this->dir . '/history', 0775, true);
         $this->savedParams = Yii::$app->params['trading'] ?? [];
         Yii::$app->params['trading'] = [
-            'historyDir' => $this->dir . '/history',
-            'stateDir'   => $this->dir . '/state',
+            'historyDir'  => $this->dir . '/history',
+            'stateDir'    => $this->dir . '/state',
+            'symbolsFile' => $this->dir . '/symbols.json',   // absent unless a test writes it → no filter
         ] + $this->savedParams;
     }
 
     protected function _after(): void
     {
         Yii::$app->params['trading'] = $this->savedParams;
-        foreach (glob($this->dir . '/*/*') ?: [] as $f) {
+        foreach ([...(glob($this->dir . '/*/*') ?: []), $this->dir . '/symbols.json'] as $f) {
             @unlink($f);
         }
         @rmdir($this->dir . '/history');
@@ -98,6 +99,16 @@ final class RsiBoardTest extends Unit
         $this->board()->build();
 
         unlink($this->dir . '/history/BBB.json');
+        $this->board()->build();
+        $this->assertSame(['AAA'], array_column($this->board()->load()['rows'], 'symbol'));
+    }
+
+    public function testTickersDroppedFromMasterListLeaveTheBoard(): void
+    {
+        $this->writeSymbol('AAA', 30, 1.0);
+        $this->writeSymbol('OLD', 30, 1.0);   // history file still on disk, ticker delisted from the list
+        file_put_contents($this->dir . '/symbols.json', json_encode(['symbols' => ['AAA', 'NEWCOIN']]));
+
         $this->board()->build();
         $this->assertSame(['AAA'], array_column($this->board()->load()['rows'], 'symbol'));
     }

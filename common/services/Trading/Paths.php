@@ -44,9 +44,21 @@ final class Paths
         return self::macroDir() . '/dominance.jsonl';
     }
 
+    /** Master list of HashHedge tickers ({"symbols": [...]}) — the universe every fetcher and board works on. */
+    public static function symbolsFile(): string
+    {
+        return self::resolve('symbolsFile', '@common/data/hashhedge_symbols.json');
+    }
+
     public static function instrumentsIndex(): string
     {
         return self::historyPricesDir() . '/_instruments_index.json';
+    }
+
+    /** Cached Binance USD-M perpetuals list (fallback price source). */
+    public static function binanceIndex(): string
+    {
+        return self::historyPricesDir() . '/_binance_um_index.json';
     }
 
     public static function fetchState(): string

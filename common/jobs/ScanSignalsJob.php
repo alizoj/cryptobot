@@ -68,6 +68,14 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
      */
     private const MACRO_MAX_AGE_SEC = 12 * 3600;
 
+    /**
+     * Symbols newly added to hashhedge_symbols.json get their lifetime history
+     * backfilled at most this many per run (~30 s each); the rest follow on
+     * the next runs. Keeps a big list change well inside {@see getTtr} — past
+     * it the worker kills the job before the `finally` reschedules the loop.
+     */
+    private const MAX_NEW_SYMBOLS_PER_RUN = 8;
+
     public function execute($queue): void
     {
         $tag = 'trading.scan';
@@ -85,7 +93,7 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
             // would hammer those free endpoints ~1,440×/day. The RSI heatmap
             // uses none of the macro data; this keeps the minute loop cheap.
             $results = array_merge(
-                $fetcher->refreshPrices([], $log),
+                $fetcher->refreshPrices(['maxNewSymbols' => self::MAX_NEW_SYMBOLS_PER_RUN], $log),
                 $fetcher->refreshDerivatives([], $log),
             );
             if (self::macroStale(self::MACRO_MAX_AGE_SEC)) {

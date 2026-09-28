@@ -12,7 +12,9 @@ use Yii;
 /**
  * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 15m, 5m by
  * default) for every HashHedge-listed symbol from the Bybit V5 public API and
- * write them out to common/data/history_prices/<SYMBOL>.json. The 2h/30m/15m/5m
+ * write them out to common/data/history_prices/<SYMBOL>.json. Tickers Bybit
+ * doesn't list fall back to Binance USD-M futures ({@see BinanceFutures}),
+ * stored in the same row shape with bybit_category = 'binance_um'. The 2h/30m/15m/5m
  * intervals are kept for short multi-timeframe indicators (15m feeds the RSI
  * heatmap's lowest timeframe).
  *
@@ -80,13 +82,16 @@ final class BybitPriceFetcher
 
     private BybitHttp $http;
     private InstrumentsIndex $instruments;
+    private BinanceFutures $binance;
 
     public function __construct(
         ?BybitHttp $http = null,
         ?InstrumentsIndex $instruments = null,
+        ?BinanceFutures $binance = null,
     ) {
         $this->http = $http ?? new BybitHttp();
         $this->instruments = $instruments ?? new InstrumentsIndex($this->http, Paths::instrumentsIndex());
+        $this->binance = $binance ?? new BinanceFutures(Paths::binanceIndex());
     }
 
     /**
@@ -94,8 +99,10 @@ final class BybitPriceFetcher
      *   only?:list<string>|null,
      *   refresh?:bool,
      *   refreshIndex?:bool,
-     *   intervals?:list<string>
-     * } $opts
+     *   intervals?:list<string>,
+     *   maxNewSymbols?:int|null
+     * } $opts maxNewSymbols caps the from-scratch backfills per run (symbols
+     *   with no history file yet); the rest are deferred to later runs
      */
     public function run(array $opts = [], ?callable $log = null): FetchResult
     {
@@ -106,6 +113,7 @@ final class BybitPriceFetcher
         $refresh      = (bool)($opts['refresh'] ?? false);
         $refreshIndex = (bool)($opts['refreshIndex'] ?? false);
         $intervals    = $opts['intervals'] ?? self::DEFAULT_INTERVALS;
+        $maxNew       = isset($opts['maxNewSymbols']) ? (int)$opts['maxNewSymbols'] : null;
 
         foreach ($intervals as $label) {
             if (!array_key_exists($label, self::INTERVAL_LABELS)) {
@@ -139,6 +147,8 @@ final class BybitPriceFetcher
         $success = 0;
         $fetched = 0;
         $skipped = 0;
+        $newStarted = 0;
+        $deferred = 0;
 
         foreach ($symbols as $i => $sym) {
             $prefix  = sprintf('[%3d/%d] %-8s', $i + 1, $total, $sym);
@@ -198,12 +208,23 @@ final class BybitPriceFetcher
                 continue;
             }
 
-            $resolved = $this->instruments->resolveSpotOrLinear($sym, $overrides);
+            $resolved = $this->instruments->resolveSpotOrLinear($sym, $overrides) ?? $this->resolveBinance($sym, $log);
             if ($resolved === null) {
-                $log("$prefix - no Bybit spot or linear pair found");
-                $failures[$sym] = ['error' => 'no bybit pair', 'when' => JsonFormatter::isoUtcNow()];
+                $log("$prefix - no Bybit spot/linear pair and no Binance USD-M perp found");
+                $failures[$sym] = ['error' => 'no bybit or binance pair', 'when' => JsonFormatter::isoUtcNow()];
                 $this->saveFailures($failuresFile, $failures);
                 continue;
+            }
+            // A new symbol costs a full lifetime backfill (~100 API calls). Cap
+            // them per run so a big list change can't push one queue job past
+            // its TTR — the worker would kill it before it reschedules the loop.
+            if ($maxNew !== null && $existing === null && !file_exists($outPath)) {
+                if ($newStarted >= $maxNew) {
+                    $deferred++;
+                    $log("$prefix - new symbol, backfill deferred to a later run (max $maxNew per run)");
+                    continue;
+                }
+                $newStarted++;
             }
             [$bybitSymbol, $category, $inst] = $resolved;
             $log("$prefix -> $bybitSymbol ($category), fetching: " . implode(',', $needed));
@@ -214,11 +235,11 @@ final class BybitPriceFetcher
                 foreach ($needed as $label) {
                     if (isset($incrementalStart[$label])) {
                         $existingRows = $existingIntervals[$label]['rows'] ?? [];
-                        $fresh = $this->fetchLifetimeKlines(
+                        $fresh = $this->fetchKlines(
                             $category,
                             $bybitSymbol,
                             self::incrementalStartMs($label, $incrementalStart[$label], $launchTime, $nowMs),
-                            self::INTERVAL_LABELS[$label],
+                            $label,
                         );
                         $merged = $this->mergeRowsByTs($existingRows, $fresh);
                         $added  = count($merged) - count($existingRows);
@@ -269,13 +290,16 @@ final class BybitPriceFetcher
         $this->saveFailures($failuresFile, $failures);
         $elapsed = round(microtime(true) - $started, 2);
 
-        $summary = "prices: $success/$total ok  fetched=$fetched  skipped=$skipped  failures=" . count($failures);
+        $summary = "prices: $success/$total ok  fetched=$fetched  skipped=$skipped"
+            . ($deferred > 0 ? "  deferred=$deferred" : '')
+            . '  failures=' . count($failures);
         $log($summary);
         return FetchResult::ok('prices', $elapsed, $summary, [
             'total'    => $total,
             'success'  => $success,
             'fetched'  => $fetched,
             'skipped'  => $skipped,
+            'deferred' => $deferred,
             'failures' => count($failures),
         ]);
     }
@@ -309,6 +333,30 @@ final class BybitPriceFetcher
     {
         @mkdir(dirname($path), 0775, recursive: true);
         file_put_contents($path, JsonFormatter::encode2Space($failures));
+    }
+
+    /**
+     * Binance USD-M for a ticker Bybit doesn't list, or null. A failed lookup
+     * (network, geo-block) only costs that ticker this run.
+     *
+     * @return array{0:string, 1:string, 2:array<string,mixed>}|null
+     */
+    private function resolveBinance(string $sym, callable $log): ?array
+    {
+        try {
+            return $this->binance->resolve($sym);
+        } catch (Throwable $e) {
+            $log("           Binance USD-M lookup failed: {$e->getMessage()}");
+            return null;
+        }
+    }
+
+    /** Rows of $label from $startMs forward, from whichever exchange the ticker resolved to. */
+    private function fetchKlines(string $category, string $symbol, int $startMs, string $label): array
+    {
+        return $category === BinanceFutures::CATEGORY
+            ? $this->binance->klines($symbol, $label, $startMs)
+            : $this->fetchLifetimeKlines($category, $symbol, $startMs, self::INTERVAL_LABELS[$label]);
     }
 
     private function fetchLifetimeKlines(string $category, string $bybitSymbol, int $startMs, string $interval): array
@@ -434,7 +482,7 @@ final class BybitPriceFetcher
     private function buildIntervalEntry(string $category, string $bybitSymbol, string $label, int $launchMs): array
     {
         $startMs = self::backfillStartMs($label, $launchMs, (int)(microtime(true) * 1000));
-        $klines = $this->fetchLifetimeKlines($category, $bybitSymbol, $startMs, self::INTERVAL_LABELS[$label]);
+        $klines = $this->fetchKlines($category, $bybitSymbol, $startMs, $label);
         return [
             'schema'        => ['startTime_ms', 'open', 'high', 'low', 'close', 'volume', 'turnover'],
             'rows'          => $klines,
