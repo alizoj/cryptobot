@@ -277,7 +277,13 @@ separate `trading/fetch-data` step — the queue job fetches first, incrementall
 > The RSI heatmap (`/trading/rsi`) never computes in the web request: it reads
 > `common/data/trade_state/rsi_board.json`, which every refresh (queue job,
 > `fetch-data`, `run-hourly`, `run-4h`) rebuilds for the symbols whose history
-> changed. If the page shows "data … old" in red, the worker/loop isn't running.
+> changed. Each rebuild also pulls Bybit's live tickers and prices the forming
+> candle of every timeframe at them — the stored daily candle alone would keep
+> the close of the first fetch after 00:00 UTC all day. So prices are as fresh
+> as the loop interval. The chart page (`/trading/chart`) takes today's candle
+> from the same board (range from the 15m bars + the live price), so both pages
+> agree. If the RSI page shows "prices/data … old" in red, the worker/loop
+> isn't running.
 
 > `trading/scan`, `trading/scan-4h` and `trading/manage-positions` remain the
 > raw building blocks (handy for `--dryRun`/`--asOf`). The queue job runs the

@@ -59,7 +59,8 @@ final class TradingController extends Controller
      *
      * The page only reads the precomputed board ({@see RsiBoard}); it is
      * rebuilt in the background after every price refresh, so opening the page
-     * never decodes the history files.
+     * never decodes the history files. Prices and the forming bar of every
+     * timeframe are as of the last build's live tickers call.
      *
      * The default sort ('tiered') ranks rows by their overbought/oversold
      * condition hierarchically — 1D first, then 4H, 1H, 15m — with oversold at
@@ -98,6 +99,7 @@ final class TradingController extends Controller
             'rows'    => $rows,
             'updated' => isset($board['updated']) ? (int)$board['updated'] : null,
             'dataTs'  => isset($board['data_ts']) ? (int)$board['data_ts'] : null,
+            'pricesTs' => isset($board['prices_ts']) ? (int)$board['prices_ts'] : null,
             'pending' => ScanSignalsJob::oneOffPending(),
             'sort'    => $sort,
             'dir'     => $dir,
@@ -284,7 +286,10 @@ final class TradingController extends Controller
         }
 
         $symbol  = $picked[0];
-        $candles = $md->dailyCandles($symbol);
+        // The stored daily candle for today froze at its first fetch after
+        // 00:00 UTC; the RSI board carries it re-priced at the live price.
+        $liveDay = RsiBoard::liveDays((new RsiBoard())->load(), [$symbol])[$symbol] ?? null;
+        $candles = RsiBoard::withLiveDay($md->dailyCandles($symbol), $liveDay);
         if ($candles === []) {
             throw new NotFoundHttpException("No daily candles for {$symbol}.");
         }
@@ -328,6 +333,7 @@ final class TradingController extends Controller
             'visibleTo'   => $visibleTo,
             'support'     => $support,
             'resistance'  => $resistance,
+            'pricesTs'    => $liveDay['at'] ?? null,
         ]);
     }
 
@@ -341,10 +347,12 @@ final class TradingController extends Controller
      */
     private function renderCompare(MarketData $md, array $picked, array $all, int $zoom): string
     {
+        $liveDays = RsiBoard::liveDays((new RsiBoard())->load(), $picked);
+        $pricedAt = array_filter(array_column($liveDays, 'at'));
         $loaded = [];
         $lastTs = 0;
         foreach ($picked as $sym) {
-            $candles = $md->dailyCandles($sym);
+            $candles = RsiBoard::withLiveDay($md->dailyCandles($sym), $liveDays[$sym] ?? null);
             if ($candles === []) {
                 continue;
             }
@@ -387,6 +395,7 @@ final class TradingController extends Controller
             'zoom'        => $zoom,
             'visibleFrom' => $visibleFrom,
             'visibleTo'   => $visibleTo,
+            'pricesTs'    => $pricedAt !== [] ? min($pricedAt) : null,   // the oldest, if they differ
             // single-mode extras, empty so the view template stays uniform
             'series' => [], 'entry' => null, 'stop' => null, 'side' => null,
             'setup' => null, 'asOf' => null, 'support' => [], 'resistance' => [],

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace common\services\Trading;
 
+use common\services\Trading\Fetcher\BybitHttp;
+
 /**
  * The precomputed RSI heatmap behind /trading/rsi: one row per coin with
  * Wilder RSI(14) on 1d/4h/1h/15m, last price, 24h change and 20-day turnover.
@@ -15,29 +17,57 @@ namespace common\services\Trading;
  * with `./yii trading/rsi-board` — and written to one small JSON file that the
  * page only reads.
  *
- * Builds are incremental: each row remembers the mtime of the history file it
- * came from, and a symbol is only re-decoded when its file changed since the
- * last build. A refresh run that fetched nothing costs a few stat() calls.
+ * Two layers, like the delta screener:
+ *
+ *   - BASE, per symbol: the Wilder state of each timeframe up to its last
+ *     stored bar, plus that bar. Derived from the history file, so it is only
+ *     recomputed when the file's mtime changes.
+ *
+ *   - LIVE, per build: the stored bars only move when their interval is
+ *     refetched — the price fetcher re-downloads a timeframe once its newest
+ *     bar has closed, so today's daily bar keeps the close it had at the first
+ *     fetch after 00:00 UTC. Every build therefore pulls /v5/market/tickers
+ *     (one call per category) and prices the forming bar of each timeframe at
+ *     the live last price. If the tickers call fails, the freshest stored
+ *     close (15m) stands in.
  */
 final class RsiBoard
 {
     /** Heatmap column => MarketData interval label, in sort-hierarchy order (1D dominant → 15m). */
     public const TFS = ['1d' => 'D', '4h' => '4h', '1h' => '1h', '15m' => '15m'];
 
-    /** Bars read per timeframe (RSI warm-up; also covers the 20-day turnover). */
+    /** Bar length per heatmap column, ms. */
+    public const TF_PERIOD_MS = ['1d' => 86_400_000, '4h' => 14_400_000, '1h' => 3_600_000, '15m' => 900_000];
+
+    /** Closes per timeframe fed to RSI (the last one being the forming bar). */
     public const LOOKBACK = 250;
 
     /** 20-day average daily turnover below which a coin is flagged "thin". */
     public const MIN_TURNOVER = 5_000_000;
 
     /** Bump when the row shape changes so the next build recomputes every row. */
-    private const VERSION = 2;
+    private const VERSION = 4;
+
+    private const DAY_MS = 86_400_000;
+
+    /** @var \Closure(list<string>): array<string, array{price:float, chg24h:?float}> */
+    private \Closure $tickers;
+
+    /**
+     * @param (\Closure(list<string>): array<string, array{price:float, chg24h:?float}>)|null $tickers
+     *        live quotes keyed "category:SYMBOL" for the given categories;
+     *        defaults to Bybit /v5/market/tickers (tests inject a stub)
+     */
+    public function __construct(?\Closure $tickers = null)
+    {
+        $this->tickers = $tickers ?? static fn(array $categories): array => self::fetchTickers($categories);
+    }
 
     /**
      * The last built board, or null if none has been built yet (or the file is
      * unreadable). Cheap: one small file read.
      *
-     * @return array{version:int, updated:int, data_ts:?int, rows:list<array<string,mixed>>, skipped:array<string,int>}|null
+     * @return array{version:int, updated:int, prices_ts:?int, data_ts:?int, rows:list<array<string,mixed>>, skipped:array<string,int>}|null
      */
     public function load(): ?array
     {
@@ -50,14 +80,14 @@ final class RsiBoard
     }
 
     /**
-     * Rebuild the board from the history files and write it out. Rows whose
-     * source file is unchanged since the previous build are reused as-is
-     * unless $force is set.
+     * Rebuild the board and write it out. Symbols whose history file is
+     * unchanged since the previous build reuse their base layer unless $force
+     * is set; live prices are applied to every row on every build.
      *
      * @param callable(string):void|null $log
-     * @return array{symbols:int, computed:int, reused:int, seconds:float}
+     * @return array{symbols:int, computed:int, reused:int, live:int, seconds:float}
      */
-    public function build(?callable $log = null, bool $force = false): array
+    public function build(?callable $log = null, bool $force = false, ?int $nowMs = null): array
     {
         $log ??= static function (string $_): void {};
         $started = microtime(true);
@@ -67,9 +97,9 @@ final class RsiBoard
         if ($prev !== null && (int)($prev['version'] ?? 0) !== self::VERSION) {
             $prev = null;
         }
-        $prevRows = [];
+        $prevBases = [];
         foreach ($prev['rows'] ?? [] as $r) {
-            $prevRows[$r['symbol']] = $r;
+            $prevBases[$r['symbol']] = $r['base'];
         }
         $prevSkipped = $prev['skipped'] ?? [];
 
@@ -78,14 +108,14 @@ final class RsiBoard
 
         $md = new MarketData();
         $dir = Paths::historyPricesDir();
-        $rows = [];
+        $bases = [];
         $skipped = [];
         $computed = 0;
         $reused = 0;
         foreach ($md->listSymbols() as $sym) {
             $mtime = (int)@filemtime("{$dir}/{$sym}.json");
-            if (isset($prevRows[$sym]) && (int)($prevRows[$sym]['src_mtime'] ?? -1) === $mtime) {
-                $rows[] = $prevRows[$sym];
+            if (isset($prevBases[$sym]) && (int)($prevBases[$sym]['src_mtime'] ?? -1) === $mtime) {
+                $bases[] = $prevBases[$sym];
                 $reused++;
                 continue;
             }
@@ -93,24 +123,44 @@ final class RsiBoard
                 $skipped[$sym] = $mtime;
                 continue;
             }
-            $row = self::computeRow($md, $sym);
+            $base = self::computeBase($md, $sym);
             $md->forgetSymbol();
             $computed++;
-            if ($row === null) {
+            if ($base === null) {
                 $skipped[$sym] = $mtime;   // too little history — retry only when the file changes
                 continue;
             }
-            $row['src_mtime'] = $mtime;
-            $rows[] = $row;
+            $base['src_mtime'] = $mtime;
+            $bases[] = $base;
         }
 
-        $lastTs = array_column($rows, 'last_ts');
+        $nowMs ??= (int)(microtime(true) * 1000);
+        $quotes = [];
+        $categories = array_values(array_unique(array_filter(array_column($bases, 'category'))));
+        if ($categories !== []) {
+            try {
+                $quotes = ($this->tickers)($categories);
+            } catch (\Throwable $e) {
+                $log('rsi-board: live tickers unavailable (' . $e->getMessage() . ') — using stored closes');
+            }
+        }
+
+        $rows = [];
+        $live = 0;
+        foreach ($bases as $base) {
+            $quote = $quotes[$base['category'] . ':' . $base['bybit']] ?? null;
+            $rows[] = self::row($base, $quote, $nowMs);
+            $live += $quote !== null ? 1 : 0;
+        }
+
+        $lastTs = array_column($bases, 'last_ts');
         $board = [
-            'version' => self::VERSION,
-            'updated' => time(),
-            'data_ts' => $lastTs !== [] ? max($lastTs) : null,
-            'rows'    => $rows,
-            'skipped' => $skipped,
+            'version'   => self::VERSION,
+            'updated'   => time(),
+            'prices_ts' => $live > 0 ? $nowMs : null,
+            'data_ts'   => $lastTs !== [] ? max($lastTs) : null,
+            'rows'      => $rows,
+            'skipped'   => $skipped,
         ];
         self::writeAtomic(
             Paths::rsiBoardFile(),
@@ -121,26 +171,193 @@ final class RsiBoard
             'symbols'  => count($rows),
             'computed' => $computed,
             'reused'   => $reused,
+            'live'     => $live,
             'seconds'  => round(microtime(true) - $started, 2),
         ];
         $log(sprintf(
-            'rsi-board: %d coins  computed=%d  reused=%d  %.1fs',
+            'rsi-board: %d coins  computed=%d  reused=%d  live=%d  %.1fs',
             $sum['symbols'],
             $sum['computed'],
             $sum['reused'],
+            $sum['live'],
             $sum['seconds'],
         ));
         return $sum;
     }
 
     /**
-     * One heatmap row from the symbol's history file, or null when it has
+     * The display row: base layer + the current price folded into each
+     * timeframe's forming bar. The current price is the live quote when there
+     * is one, else the freshest stored close.
+     *
+     * @param array<string,mixed> $base
+     * @param array{price:float, chg24h:?float}|null $quote
+     * @return array<string,mixed>
+     */
+    public static function row(array $base, ?array $quote, int $nowMs): array
+    {
+        $live = $quote !== null && $quote['price'] > 0;
+        [$price, $atMs] = $live
+            ? [(float)$quote['price'], $nowMs]
+            : [(float)$base['fresh_close'], (int)$base['fresh_ts']];
+
+        $rsi = [];
+        foreach (self::TFS as $tf => $_) {
+            $rsi[$tf] = self::rsiAt($base['tfs'][$tf], $price, $atMs, self::TF_PERIOD_MS[$tf]);
+        }
+
+        $prevClose = $base['prev_close'];
+        $chg = $live && $quote['chg24h'] !== null
+            ? (float)$quote['chg24h']
+            : ($prevClose !== null && $prevClose > 0 ? ($price / $prevClose - 1) * 100 : null);
+
+        return [
+            'symbol'     => $base['symbol'],
+            'price'      => $price,
+            'chg24h'     => $chg,
+            'turnover20' => $base['turnover20'],
+            'tradeable'  => $base['tradeable'],
+            'rsi'        => $rsi,
+            'day'        => self::dayAt($base['day'], $price, $atMs),
+            'live'       => $live,
+            'last_ts'    => $base['last_ts'],
+            'base'       => $base,
+        ];
+    }
+
+    /**
+     * The forming daily candle of each symbol as of the last build, for the
+     * chart page: the stored history's last daily candle keeps the high, low
+     * and close of its first fetch after 00:00 UTC; this one is extended with
+     * the 15m bars since and priced at the build's live price. Symbols not on
+     * the board (or no board at all) are left out.
+     *
+     * @param array<string,mixed>|null $board from {@see load}
+     * @param list<string> $symbols
+     * @return array<string, array{ts:int, o:float, h:float, l:float, c:float, at:?int}>
+     */
+    public static function liveDays(?array $board, array $symbols): array
+    {
+        $want = array_flip($symbols);
+        $out = [];
+        foreach ($board['rows'] ?? [] as $r) {
+            if (isset($want[$r['symbol']], $r['day'])) {
+                $out[$r['symbol']] = $r['day'];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Daily candles (MarketData shape, ascending) with the last one replaced
+     * by the board's forming day: same day → its high/low/close are merged in
+     * (the stored open stays); the day after → appended; an older board day
+     * (history file refetched after the build) → the file wins.
+     *
+     * @param list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> $candles
+     * @param array{ts:int, o:float, h:float, l:float, c:float}|null $day
+     * @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}>
+     */
+    public static function withLiveDay(array $candles, ?array $day): array
+    {
+        $n = count($candles);
+        if ($day === null || $n === 0) {
+            return $candles;
+        }
+        $last = $candles[$n - 1];
+        $dayTs = (int)$day['ts'];
+        if ($dayTs === (int)$last['ts']) {
+            $candles[$n - 1] = [
+                'ts' => $last['ts'],
+                'o'  => $last['o'],
+                'h'  => max((float)$last['h'], (float)$day['h']),
+                'l'  => min((float)$last['l'], (float)$day['l']),
+                'c'  => (float)$day['c'],
+                'v'  => $last['v'],
+            ];
+        } elseif ($dayTs > (int)$last['ts']) {
+            $candles[] = [
+                'ts' => $dayTs,
+                'o'  => (float)$day['o'],
+                'h'  => (float)$day['h'],
+                'l'  => (float)$day['l'],
+                'c'  => (float)$day['c'],
+                'v'  => 0.0,
+            ];
+        }
+        return $candles;
+    }
+
+    /**
+     * The forming daily candle with $price as of $atMs folded in — same
+     * windows as {@see rsiAt}: inside the stored day → extend high/low and
+     * move the close; inside the next day → a new candle opening at the stored
+     * close (crypto trades round the clock, so the open is the prior close);
+     * further out → unchanged. 'at' is when the close was priced (null when
+     * unchanged).
+     *
+     * @param array{ts:int, o:float, h:float, l:float, c:float} $day
+     * @return array{ts:int, o:float, h:float, l:float, c:float, at:?int}
+     */
+    private static function dayAt(array $day, float $price, int $atMs): array
+    {
+        $ts = (int)$day['ts'];
+        if ($price <= 0 || $atMs < $ts) {
+            return $day + ['at' => null];
+        }
+        if ($atMs < $ts + self::DAY_MS) {
+            return [
+                'ts' => $ts,
+                'o'  => (float)$day['o'],
+                'h'  => max((float)$day['h'], $price),
+                'l'  => min((float)$day['l'], $price),
+                'c'  => $price,
+                'at' => $atMs,
+            ];
+        }
+        if ($atMs < $ts + 2 * self::DAY_MS) {
+            $open = (float)$day['c'];
+            return ['ts' => $ts + self::DAY_MS, 'o' => $open, 'h' => max($open, $price), 'l' => min($open, $price), 'c' => $price, 'at' => $atMs];
+        }
+        return $day + ['at' => null];
+    }
+
+    /**
+     * RSI of one timeframe with $price as the close of the bar that is forming
+     * at $atMs:
+     *   - still inside the stored last bar  → that bar's close becomes $price;
+     *   - inside the bar right after it     → the stored bar counts as closed
+     *     and $price is the new bar's close;
+     *   - further out (or $price predates the bar) → bars are missing, so the
+     *     stored RSI stays (the page flags such coins as stale).
+     *
+     * @param array{ts:int, close:float, state:?array{g:float,l:float,c:float}, rsi:?float} $tf
+     */
+    private static function rsiAt(array $tf, float $price, int $atMs, int $periodMs): ?float
+    {
+        $state = $tf['state'];
+        $ts = (int)$tf['ts'];
+        if ($state === null || $price <= 0 || $atMs < $ts) {
+            return $tf['rsi'];
+        }
+        if ($atMs < $ts + $periodMs) {
+            return round(CoinMetrics::rsiWithClose($state, $price), 1);
+        }
+        if ($atMs < $ts + 2 * $periodMs) {
+            return round(CoinMetrics::rsiWithClose(CoinMetrics::rsiAdvance($state, (float)$tf['close']), $price), 1);
+        }
+        return $tf['rsi'];
+    }
+
+    /**
+     * Base layer of one symbol from its history file, or null when it has
      * fewer than 15 daily bars (not enough for RSI(14)).
      *
      * @return array<string,mixed>|null
      */
-    private static function computeRow(MarketData $md, string $sym): ?array
+    private static function computeBase(MarketData $md, string $sym): ?array
     {
+        $rec = $md->loadSymbol($sym);
         // Tail reads only: every value below needs at most the last LOOKBACK
         // bars, and keying the full lifetime 1h/4h series instead costs tens
         // of MB per symbol on top of the decoded file.
@@ -153,40 +370,100 @@ final class RsiBoard
             return null;
         }
 
-        $rsi = [];
+        $tfs = [];
         $lastTs = 0;
+        $freshClose = null;
+        $freshTs = 0;
         foreach ($series as $tf => $candles) {
-            $rsi[$tf] = self::rsiOf($candles);
-            if ($candles !== []) {
-                $lastTs = max($lastTs, (int)$candles[count($candles) - 1]['ts']);
+            if ($candles === []) {
+                $tfs[$tf] = ['ts' => 0, 'close' => 0.0, 'state' => null, 'rsi' => null];
+                continue;
+            }
+            $closes = array_column($candles, 'c');
+            $last = $candles[count($candles) - 1];
+            $r = count($closes) >= 15 ? CoinMetrics::calcRSI($closes) : null;
+            $tfs[$tf] = [
+                'ts'    => (int)$last['ts'],
+                'close' => (float)$last['c'],
+                // State over everything before the last stored bar, so the
+                // live price can replace that bar's close (16+ closes: the
+                // RSI(14) seed needs 15 without it).
+                'state' => count($closes) >= 16 ? CoinMetrics::rsiState(array_slice($closes, 0, -1)) : null,
+                'rsi'   => $r !== null ? round($r, 1) : null,
+            ];
+            $lastTs = max($lastTs, (int)$last['ts']);
+            // TFS runs 1d → 15m: the shortest timeframe's close was fetched
+            // most recently — the fallback price when there is no live quote.
+            $freshClose = (float)$last['c'];
+            $freshTs = (int)$last['ts'];
+        }
+
+        // The stored daily candle froze at its first fetch of the day; the 15m
+        // bars since its open (refetched every 15 minutes) carry the rest of
+        // the day's range and a fresher close.
+        $d = $daily[count($daily) - 1];
+        $day = ['ts' => (int)$d['ts'], 'o' => (float)$d['o'], 'h' => (float)$d['h'], 'l' => (float)$d['l'], 'c' => (float)$d['c']];
+        foreach ($series['15m'] as $b) {
+            if ($b['ts'] >= $day['ts'] && $b['ts'] < $day['ts'] + self::DAY_MS) {
+                $day['h'] = max($day['h'], (float)$b['h']);
+                $day['l'] = min($day['l'], (float)$b['l']);
+                $day['c'] = (float)$b['c'];
             }
         }
 
-        $price = (float)$daily[count($daily) - 1]['c'];
-        $prev  = $daily[count($daily) - 2] ?? null;
-        $chg   = ($prev !== null && (float)$prev['c'] > 0) ? ($price / (float)$prev['c'] - 1) * 100 : null;
         $turn20 = self::turnover20($daily);
-
         return [
-            'symbol'     => $sym,
-            'price'      => $price,
-            'chg24h'     => $chg,
-            'turnover20' => $turn20,
-            'tradeable'  => $turn20 !== null && $turn20 >= self::MIN_TURNOVER,
-            'rsi'        => $rsi,
-            'last_ts'    => $lastTs,   // open time (ms) of the newest bar on any timeframe
+            'symbol'      => $sym,
+            'bybit'       => (string)($rec['bybit_symbol'] ?? ''),
+            'category'    => (string)($rec['bybit_category'] ?? ''),
+            'tfs'         => $tfs,
+            'day'         => $day,
+            'prev_close'  => isset($daily[count($daily) - 2]) ? (float)$daily[count($daily) - 2]['c'] : null,
+            'fresh_close' => $freshClose,
+            'fresh_ts'    => $freshTs,
+            'turnover20'  => $turn20,
+            'tradeable'   => $turn20 !== null && $turn20 >= self::MIN_TURNOVER,
+            'last_ts'     => $lastTs,   // open time (ms) of the newest stored bar on any timeframe
         ];
     }
 
-    /** Wilder RSI(14) of the last LOOKBACK closes of an OHLCV series, or null. */
-    private static function rsiOf(array $candles): ?float
+    /**
+     * Live last price + rolling 24h change (%) for every symbol of the given
+     * categories — one /v5/market/tickers call per category. A category that
+     * fails is skipped; its coins fall back to stored closes.
+     *
+     * @param list<string> $categories
+     * @return array<string, array{price:float, chg24h:?float}> keyed "category:SYMBOL"
+     */
+    private static function fetchTickers(array $categories): array
     {
-        if (count($candles) < 15) {
-            return null;
+        $http = new BybitHttp();
+        $out = [];
+        $errors = [];
+        foreach ($categories as $i => $cat) {
+            if ($i > 0) {
+                $http->throttle();
+            }
+            try {
+                $res = $http->get('/v5/market/tickers', ['category' => $cat]);
+            } catch (\Throwable $e) {
+                $errors[] = "{$cat}: {$e->getMessage()}";
+                continue;
+            }
+            foreach ($res['list'] ?? [] as $t) {
+                if (!isset($t['symbol'], $t['lastPrice']) || (float)$t['lastPrice'] <= 0) {
+                    continue;
+                }
+                $out[$cat . ':' . $t['symbol']] = [
+                    'price'  => (float)$t['lastPrice'],
+                    'chg24h' => is_numeric($t['price24hPcnt'] ?? null) ? (float)$t['price24hPcnt'] * 100 : null,
+                ];
+            }
         }
-        $closes = array_column(array_slice($candles, -self::LOOKBACK), 'c');
-        $r = CoinMetrics::calcRSI($closes);
-        return $r !== null ? round($r, 1) : null;
+        if ($out === [] && $errors !== []) {
+            throw new \RuntimeException(implode('; ', $errors));
+        }
+        return $out;
     }
 
     /** 20-day average daily turnover (close × volume). */

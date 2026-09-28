@@ -45,6 +45,8 @@ return [
     'Zoom:' => 'Масштаб:',
     'support' => 'поддержка',
     'resistance' => 'сопротивление',
+    'price {time} UTC' => 'цена {time} UTC',
+    'Today\'s candle is priced as of {time} UTC' => 'Цена сегодняшней свечи на {time} UTC',
 
     // --- DELTA_ALIGNMENT screener (/trading/delta) ---
     'Delta Alignment' => 'Дельта-сигнал',

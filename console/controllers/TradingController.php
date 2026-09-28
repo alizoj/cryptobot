@@ -382,12 +382,13 @@ final class TradingController extends Controller
             return false;
         }
         $this->stdout(sprintf(
-            "  OK   rsi-board     %.1fs  %d coins  computed=%d  reused=%d\n",
+            "  OK   rsi-board     %.1fs  %d coins  computed=%d  reused=%d  live prices=%d\n",
             $sum['seconds'],
             $sum['symbols'],
             $sum['computed'],
             $sum['reused'],
-        ), Console::FG_GREEN);
+            $sum['live'],
+        ), $sum['live'] > 0 ? Console::FG_GREEN : Console::FG_YELLOW);
         return true;
     }
 }

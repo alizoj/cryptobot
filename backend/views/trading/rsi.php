@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var list<array<string, mixed>> $rows */
 /** @var int|null $updated unix time the board was built, null = never */
 /** @var int|null $dataTs open time (ms) of the newest candle on the board */
+/** @var int|null $pricesTs time (ms) of the live tickers the board was priced at, null = stored closes only */
 /** @var int|null $pending unix time a one-off refresh was queued, null = none */
 /** @var string $sort */
 /** @var string $dir */
@@ -84,6 +85,11 @@ $dataStale  = $dataAge !== null && $dataAge > $staleAfter;
 // A coin whose own candles lag the board's newest by this much stopped updating
 // (delisted, fetch failing).
 $rowLagMs = $staleAfter * 1000;
+// Prices come from the tickers call of the last board build; the loop rebuilds
+// it every run, so older than this means the loop has stalled.
+$pricesAge   = $pricesTs !== null ? time() - intdiv($pricesTs, 1000) : null;
+$pricesStale = $pricesAge !== null && $pricesAge > 1800;
+$fmtUtc = static fn(int $ms): string => gmdate('Y-m-d H:i', intdiv($ms, 1000)) . ' UTC';
 ?>
 
 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3 mb-2">
@@ -98,9 +104,14 @@ $rowLagMs = $staleAfter * 1000;
             <span style="background-color:hsla(2,64%,45%,0.58)"></span>
             overbought
         </span>
-        <?php if ($dataAge !== null): ?>
+        <?php if ($pricesAge !== null): ?>
+            <span class="small <?= $pricesStale || $dataStale ? 'text-danger fw-semibold' : 'text-secondary' ?>"
+                  title="Live Bybit prices as of <?= $fmtUtc($pricesTs) ?>; newest stored candle opened <?= $fmtUtc((int)$dataTs) ?>">
+                prices <?= $agoStr($pricesAge) ?> ago
+            </span>
+        <?php elseif ($dataAge !== null): ?>
             <span class="small <?= $dataStale ? 'text-danger fw-semibold' : 'text-secondary' ?>"
-                  title="Newest candle opened <?= gmdate('Y-m-d H:i', intdiv($dataTs, 1000)) ?> UTC; board built <?= $agoStr(time() - (int)$updated) ?> ago">
+                  title="No live prices on the last build — stored closes; newest candle opened <?= $fmtUtc($dataTs) ?>">
                 data <?= $agoStr($dataAge) ?> old
             </span>
         <?php endif ?>
@@ -113,16 +124,22 @@ $rowLagMs = $staleAfter * 1000;
     </div>
 </div>
 
-<?php if ($dataStale): ?>
+<?php if ($dataStale || $pricesStale): ?>
     <div class="alert alert-warning small py-2">
-        Market data is <strong><?= $agoStr($dataAge) ?> old</strong> — the background refresh isn't running.
+        <?php if ($pricesStale): ?>
+            Prices are <strong><?= $agoStr($pricesAge) ?> old</strong>
+        <?php else: ?>
+            Candle data is <strong><?= $agoStr($dataAge) ?> old</strong>
+        <?php endif ?>
+        — the background refresh isn't running.
         Start the queue worker (<code>yii queue/listen --verbose=1</code>) and the refresh loop
         (<code>yii trading/schedule-refresh</code>), or run <code>yii trading/fetch-data</code> once.
     </div>
 <?php endif ?>
 
 <p class="text-secondary small mb-2">
-    Wilder RSI(14) per timeframe, Bybit data. Default sort tiers each coin by its
+    Wilder RSI(14) per timeframe, Bybit data; the forming candle of every timeframe
+    is priced at the live last price. 24h = rolling 24h change. Default sort tiers each coin by its
     overbought (&ge;70) / oversold (&le;30) state hierarchically &mdash; 1D first, then
     4H, 1H, 15m &mdash; with <strong>oversold on top</strong>. Click any column to sort by it.
 </p>
@@ -156,7 +173,11 @@ $rowLagMs = $staleAfter * 1000;
                             <span class="badge bg-warning-subtle text-warning-emphasis" title="Last candle <?= gmdate('Y-m-d H:i', intdiv($lastTs, 1000)) ?> UTC — this coin stopped updating">stale</span>
                         <?php endif ?>
                     </td>
-                    <td class="text-end num"><?= $fmtPx((float)$r['price']) ?></td>
+                    <?php if (!empty($r['live'])): ?>
+                        <td class="text-end num"><?= $fmtPx((float)$r['price']) ?></td>
+                    <?php else: ?>
+                        <td class="text-end num text-secondary" title="No live quote — last stored close">~<?= $fmtPx((float)$r['price']) ?></td>
+                    <?php endif ?>
                     <?= $chgCell($r['chg24h'] !== null ? (float)$r['chg24h'] : null) ?>
                     <?= $rsiCell($r['rsi']['1d'], true) ?>
                     <?= $rsiCell($r['rsi']['4h']) ?>

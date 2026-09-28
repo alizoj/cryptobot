@@ -23,6 +23,7 @@ declare(strict_types=1);
  * @var int $visibleTo
  * @var list<float> $support
  * @var list<float> $resistance
+ * @var int|null $pricesTs when (ms) today's candle was priced by the RSI board build, null = stored candles only
  */
 
 use yii\helpers\Html;
@@ -158,6 +159,12 @@ CSS);
         </div>
 
         <span class="small text-muted ms-auto">
+            <?php if ($pricesTs !== null):
+                $pricedAt = gmdate('H:i', intdiv($pricesTs, 1000));
+                $pricedTitle = Yii::t('app', 'Today\'s candle is priced as of {time} UTC', ['time' => gmdate('Y-m-d H:i', intdiv($pricesTs, 1000))]);
+            ?>
+                <span class="me-2" title="<?= Html::encode($pricedTitle) ?>"><?= Yii::t('app', 'price {time} UTC', ['time' => $pricedAt]) ?></span>
+            <?php endif ?>
             <?php if ($isCompare): ?>
                 0% = <?= Yii::t('app', 'window start') ?>
             <?php else: ?>
