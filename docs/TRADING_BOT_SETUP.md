@@ -269,9 +269,15 @@ separate `trading/fetch-data` step — the queue job fetches first, incrementall
 ./yii trading/scan-4h --asOf="2026-05-14 16:00" # 4h scan at a specific UTC 4h close
 ./yii trading/manage-positions                  # one-off lifecycle pass
 ./yii trading/fetch-data                        # ad-hoc refresh (incremental); the queue job already covers this
+./yii trading/rsi-board [--force=1]             # rebuild the /trading/rsi board from stored data (no API calls)
 ./yii trading/test-telegram                     # verify channel creds
 ./yii trading/test-chart BTC                    # verify the QuickChart -> Telegram image pipeline
 ```
+
+> The RSI heatmap (`/trading/rsi`) never computes in the web request: it reads
+> `common/data/trade_state/rsi_board.json`, which every refresh (queue job,
+> `fetch-data`, `run-hourly`, `run-4h`) rebuilds for the symbols whose history
+> changed. If the page shows "data … old" in red, the worker/loop isn't running.
 
 > `trading/scan`, `trading/scan-4h` and `trading/manage-positions` remain the
 > raw building blocks (handy for `--dryRun`/`--asOf`). The queue job runs the

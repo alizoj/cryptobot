@@ -145,9 +145,11 @@ final class BybitPriceFetcher
             $outPath = "$outDir/$sym.json";
 
             $existing = null;
+            $legacy = false;
             if (file_exists($outPath)) {
                 try {
                     $existing = json_decode((string)file_get_contents($outPath), associative: true, flags: JSON_THROW_ON_ERROR);
+                    $legacy = isset($existing['history']) && !isset($existing['history']['intervals']);
                     $existing = $this->migrateLegacyHistory($existing);
                 } catch (Throwable $e) {
                     $log("$prefix - existing file unreadable ({$e->getMessage()}), refetching");
@@ -180,11 +182,14 @@ final class BybitPriceFetcher
                 $skipped++;
                 $success++;
                 if ($existing !== null) {
-                    $reordered = $existing;
-                    $reordered['history']['intervals'] = $this->sortIntervalsCanonical($existingIntervals);
-                    $newJson = JsonFormatter::encode2Space($reordered);
-                    if ($newJson !== file_get_contents($outPath)) {
-                        file_put_contents($outPath, $newJson);
+                    // Rewrite only when the structure actually changes (legacy
+                    // single-interval layout, or intervals out of canonical
+                    // order). Re-encoding each file just to byte-compare it
+                    // (up to 0.25 s per 20 MB file) was ~2/3 of a no-op run.
+                    $canonical = $this->sortIntervalsCanonical($existingIntervals);
+                    if ($legacy || array_keys($canonical) !== array_keys($existingIntervals)) {
+                        $existing['history']['intervals'] = $canonical;
+                        file_put_contents($outPath, JsonFormatter::encode2Space($existing));
                         $log("$prefix - migrated structure (no fetch needed)");
                     } else {
                         $log("$prefix - all intervals fresh, skipping");
@@ -212,7 +217,7 @@ final class BybitPriceFetcher
                         $fresh = $this->fetchLifetimeKlines(
                             $category,
                             $bybitSymbol,
-                            $incrementalStart[$label],
+                            self::incrementalStartMs($label, $incrementalStart[$label], $launchTime, $nowMs),
                             self::INTERVAL_LABELS[$label],
                         );
                         $merged = $this->mergeRowsByTs($existingRows, $fresh);
@@ -390,6 +395,20 @@ final class BybitPriceFetcher
             return $launchMs;
         }
         return max($launchMs, $nowMs - self::SHORT_BACKFILL_BARS * $period);
+    }
+
+    /**
+     * Start timestamp for an *incremental* refresh of $label whose newest
+     * stored bar opened at $lastTs: resume from that bar, but never earlier
+     * than the recent window a sub-hourly series is capped to. When the stored
+     * data is older than that window (the refresh loop was down for weeks),
+     * crawling every page since $lastTs would only fetch bars that
+     * {@see retainRows} throws away — and past the page cap it would stop short
+     * of the present. Lifetime intervals always resume from $lastTs.
+     */
+    public static function incrementalStartMs(string $label, int $lastTs, int $launchMs, int $nowMs): int
+    {
+        return max($lastTs, self::backfillStartMs($label, $launchMs, $nowMs));
     }
 
     /**

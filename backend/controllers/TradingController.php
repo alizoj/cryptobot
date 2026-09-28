@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace backend\controllers;
 
-use common\services\Trading\CoinMetrics;
+use common\jobs\ScanSignalsJob;
 use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
+use common\services\Trading\RsiBoard;
 use Yii;
 use yii\filters\AccessControl;
+use yii\filters\VerbFilter;
 use yii\web\Controller;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -21,6 +23,7 @@ use yii\web\Response;
  *
  *   /trading               redirects to the RSI heatmap
  *   /trading/rsi           multi-timeframe RSI heatmap over the whole universe
+ *   /trading/rsi-refresh   POST: queue a background data refresh + board rebuild
  *   /trading/chart         interactive candlestick for a symbol
  *   /trading/delta         DELTA_ALIGNMENT_SHORT_V1 live screener
  *   /trading/delta-ticks   JSON poll target feeding the screener (~1 Hz)
@@ -38,6 +41,10 @@ final class TradingController extends Controller
                     ['allow' => true, 'roles' => ['@']],
                 ],
             ],
+            'verbs' => [
+                'class' => VerbFilter::class,
+                'actions' => ['rsi-refresh' => ['post']],
+            ],
         ];
     }
 
@@ -48,9 +55,11 @@ final class TradingController extends Controller
 
     /**
      * Coin listing with multi-timeframe RSI — a Bybit-only revival of the
-     * rsi-module heatmap. Each coin shows Wilder RSI(14) on 1d/4h/1h/15m. The
-     * board is cached to runtime so the page is snappy; ?refresh=1 forces a
-     * recompute.
+     * rsi-module heatmap. Each coin shows Wilder RSI(14) on 1d/4h/1h/15m.
+     *
+     * The page only reads the precomputed board ({@see RsiBoard}); it is
+     * rebuilt in the background after every price refresh, so opening the page
+     * never decodes the history files.
      *
      * The default sort ('tiered') ranks rows by their overbought/oversold
      * condition hierarchically — 1D first, then 4H, 1H, 15m — with oversold at
@@ -59,12 +68,11 @@ final class TradingController extends Controller
      *
      *   /trading/rsi
      *   /trading/rsi?sort=1h&dir=desc
-     *   /trading/rsi?refresh=1
      */
-    public function actionRsi(string $sort = 'tiered', string $dir = 'asc', int $refresh = 0): string
+    public function actionRsi(string $sort = 'tiered', string $dir = 'asc'): string
     {
-        $board = $this->rsiBoard((bool)$refresh);
-        $rows  = $board['rows'];
+        $board = (new RsiBoard())->load();
+        $rows  = $board['rows'] ?? [];
 
         $allowed = ['tiered', 'symbol', 'price', 'chg24h', '1h', '4h', '1d', '15m', 'turnover20'];
         if (!in_array($sort, $allowed, true)) {
@@ -88,11 +96,34 @@ final class TradingController extends Controller
 
         return $this->render('rsi', [
             'rows'    => $rows,
-            'updated' => $board['updated'],
+            'updated' => isset($board['updated']) ? (int)$board['updated'] : null,
+            'dataTs'  => isset($board['data_ts']) ? (int)$board['data_ts'] : null,
+            'pending' => ScanSignalsJob::oneOffPending(),
             'sort'    => $sort,
             'dir'     => $dir,
             'tfs'     => self::RSI_TFS,
         ]);
+    }
+
+    /**
+     * "Refresh" button: queue a one-off data refresh, which rebuilds the board
+     * when it finishes. Returns immediately — the worker does the fetching.
+     */
+    public function actionRsiRefresh(string $sort = 'tiered', string $dir = 'asc'): Response
+    {
+        try {
+            $id = ScanSignalsJob::queueOneOff('rsi-page');
+            Yii::$app->session->setFlash(
+                'info',
+                $id !== null
+                    ? "Refresh queued (job #{$id}). The board updates when the worker finishes it — reload in a minute."
+                    : 'A refresh is already queued — reload in a minute.',
+            );
+        } catch (\Throwable $e) {
+            Yii::error('RSI refresh could not be queued: ' . $e->getMessage(), 'trading.scan');
+            Yii::$app->session->setFlash('error', 'Could not queue the refresh: ' . $e->getMessage());
+        }
+        return $this->redirect(['rsi', 'sort' => $sort, 'dir' => $dir]);
     }
 
     /** Timeframes shown on the heatmap, in sort-hierarchy order (1D dominant → 15m). */
@@ -147,94 +178,6 @@ final class TradingController extends Controller
     private static function numOrNull(mixed $v): ?float
     {
         return is_numeric($v) ? (float)$v : null;
-    }
-
-    /**
-     * Build (or load from a 15-min runtime cache) the per-coin RSI board over
-     * the whole fetched universe. Returns ['updated'=>int ts, 'rows'=>list].
-     *
-     * @return array{updated:int, rows:list<array<string,mixed>>}
-     */
-    private function rsiBoard(bool $force): array
-    {
-        $cacheFile = Yii::getAlias('@runtime') . '/rsi_board.json';
-        $ttl = 900;
-        if (!$force && is_file($cacheFile)) {
-            $cached = json_decode((string)file_get_contents($cacheFile), true);
-            if (is_array($cached) && (time() - (int)($cached['updated'] ?? 0)) < $ttl) {
-                return $cached;
-            }
-        }
-
-        @set_time_limit(180);
-        $md = new MarketData();
-        $rows = [];
-        foreach ($md->listSymbols() as $sym) {
-            // Tail reads only: every value below needs at most the last
-            // RSI_LOOKBACK bars, and keying the full lifetime 1h/4h series
-            // instead costs tens of MB per symbol on top of the decoded file.
-            $tail = static fn(string $interval): array => $md->intervalWindowAsOf($sym, $interval, PHP_INT_MAX, self::RSI_LOOKBACK);
-            $daily = $tail('D');
-            if (count($daily) < 15) {
-                $md->forgetSymbol();
-                continue;
-            }
-            $rsi = [
-                '1d'  => self::rsiOf($daily),
-                '4h'  => self::rsiOf($tail('4h')),
-                '1h'  => self::rsiOf($tail('1h')),
-                '15m' => self::rsiOf($tail('15m')),
-            ];
-
-            $last  = end($daily);
-            $prev  = $daily[count($daily) - 2] ?? null;
-            $price = (float)$last['c'];
-            $chg   = ($prev !== null && (float)$prev['c'] > 0) ? ($price / (float)$prev['c'] - 1) * 100 : null;
-            $turn20 = self::turnover20($daily);
-
-            $rows[] = [
-                'symbol'     => $sym,
-                'price'      => $price,
-                'chg24h'     => $chg,
-                'turnover20' => $turn20,
-                'tradeable'  => $turn20 !== null && $turn20 >= 5_000_000,
-                'rsi'        => $rsi,
-            ];
-            $md->forgetSymbol();
-        }
-
-        $out = ['updated' => time(), 'rows' => $rows];
-        @file_put_contents($cacheFile, json_encode($out));
-        return $out;
-    }
-
-    /** Bars read per timeframe for the RSI board (also covers the 20-day turnover). */
-    private const RSI_LOOKBACK = 250;
-
-    /** Wilder RSI(14) of the last RSI_LOOKBACK closes of an OHLCV series, or null. */
-    private static function rsiOf(array $candles): ?float
-    {
-        if (count($candles) < 15) {
-            return null;
-        }
-        $closes = array_column(array_slice($candles, -self::RSI_LOOKBACK), 'c');
-        $r = CoinMetrics::calcRSI($closes);
-        return $r !== null ? round($r, 1) : null;
-    }
-
-    /** 20-day average daily turnover (close × volume). */
-    private static function turnover20(array $daily): ?float
-    {
-        $n = count($daily);
-        if ($n < 1) {
-            return null;
-        }
-        $w = min(20, $n);
-        $sum = 0.0;
-        foreach (array_slice($daily, -$w) as $c) {
-            $sum += (float)$c['c'] * (float)$c['v'];
-        }
-        return $sum / $w;
     }
 
     /**

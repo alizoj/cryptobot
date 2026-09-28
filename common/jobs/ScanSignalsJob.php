@@ -6,6 +6,7 @@ namespace common\jobs;
 
 use common\services\Trading\DataFetcher;
 use common\services\Trading\Paths;
+use common\services\Trading\RsiBoard;
 use Yii;
 use yii\base\BaseObject;
 use yii\queue\JobInterface;
@@ -14,7 +15,8 @@ use yii\queue\RetryableJobInterface;
 
 /**
  * Hourly data-refresh job: bring prices/derivatives/macro current so the coin
- * charts and the RSI heatmap stay fresh.
+ * charts and the RSI heatmap stay fresh, then rebuild the precomputed RSI board
+ * ({@see RsiBoard}) that /trading/rsi reads.
  *
  * The signal engine has been removed (a new strategy is being built), so this
  * job no longer manages positions or scans for setups — it only refreshes the
@@ -38,6 +40,14 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
      * piling up parallel hourly loops.
      */
     public const SCHEDULE_GEN_KEY = 'crypto:scan_schedule_gen';
+
+    /**
+     * Cache key set while a one-off refresh is queued ({@see queueOneOff}).
+     * Cleared when that job finishes; the TTL covers a worker that never picks
+     * it up.
+     */
+    private const ONE_OFF_PENDING_KEY = 'trading.one_off_refresh_pending';
+    private const ONE_OFF_PENDING_TTL = 900;
 
     /** Re-enqueue another refresh {@see $intervalSeconds} later (hourly loop). */
     public bool $recurring = false;
@@ -93,6 +103,10 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
             // fetch/network error; the next hourly run retries from scratch.
             Yii::error('ScanSignalsJob failed: ' . $e->getMessage() . "\n" . $e->getTraceAsString(), $tag);
         } finally {
+            self::rebuildRsiBoard($tag);
+            if (!$this->recurring) {
+                self::clearOneOffPending();
+            }
             if ($this->recurring && $queue instanceof Queue) {
                 $myGen  = $this->scheduleGen ?? null;
                 $curGen = self::currentScheduleGen();
@@ -114,6 +128,57 @@ final class ScanSignalsJob extends BaseObject implements JobInterface, Retryable
                     Yii::info("ScanSignalsJob: stale chain (gen={$myGen}, current={$curGen}) — stopping, not rescheduling.", $tag);
                 }
             }
+        }
+    }
+
+    /**
+     * Rebuild the precomputed RSI heatmap the page reads — also after a partial
+     * fetch, since only symbols whose history file changed are recomputed.
+     */
+    private static function rebuildRsiBoard(string $tag): void
+    {
+        try {
+            (new RsiBoard())->build(static fn(string $line) => Yii::info($line, $tag));
+        } catch (\Throwable $e) {
+            Yii::error('RSI board rebuild failed: ' . $e->getMessage(), $tag);
+        }
+    }
+
+    /**
+     * Push a one-off refresh unless one is already waiting (the RSI page's
+     * Refresh button). Returns the job id, or null when one is already pending
+     * so repeated clicks don't stack up jobs.
+     */
+    public static function queueOneOff(string $source): int|string|null
+    {
+        if (!Yii::$app->cache->add(self::ONE_OFF_PENDING_KEY, time(), self::ONE_OFF_PENDING_TTL)) {
+            return null;
+        }
+        try {
+            return Yii::$app->queue->push(new self(['source' => $source]));
+        } catch (\Throwable $e) {
+            self::clearOneOffPending();
+            throw $e;
+        }
+    }
+
+    /** Unix time a one-off refresh was queued, or null if none is waiting. */
+    public static function oneOffPending(): ?int
+    {
+        try {
+            $v = Yii::$app->cache->get(self::ONE_OFF_PENDING_KEY);
+            return $v === false ? null : (int)$v;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    private static function clearOneOffPending(): void
+    {
+        try {
+            Yii::$app->cache->delete(self::ONE_OFF_PENDING_KEY);
+        } catch (\Throwable $e) {
+            // cache down — the key expires on its own
         }
     }
 

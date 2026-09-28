@@ -60,6 +60,12 @@ final class Paths
         return self::stateDir() . '/delta_board.json';
     }
 
+    /** Precomputed RSI heatmap rows — built in the background, read by /trading/rsi. */
+    public static function rsiBoardFile(): string
+    {
+        return self::stateDir() . '/rsi_board.json';
+    }
+
     /** Short-lived last-price cache shared by concurrent delta-ticks polls. */
     public static function deltaTickersCacheFile(): string
     {

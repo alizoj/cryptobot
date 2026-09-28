@@ -54,6 +54,27 @@ final class BybitPriceFetcherTest extends Unit
         $this->assertLessThanOrEqual(50 * BybitPriceFetcher::KLINE_LIMIT, BybitPriceFetcher::SHORT_BACKFILL_BARS);
     }
 
+    public function testIncrementalResumesFromLastBarWhenRecent(): void
+    {
+        $lastTs = self::NOW - 3 * 15 * 60_000;   // three 15m bars behind
+        foreach (['D', '1h', '15m', '5m'] as $label) {
+            $this->assertSame($lastTs, BybitPriceFetcher::incrementalStartMs($label, $lastTs, self::LAUNCH_2018, self::NOW), $label);
+        }
+    }
+
+    public function testIncrementalSubHourlyJumpsToWindowWhenLongStale(): void
+    {
+        // Loop down for ~4 months: sub-hourly refetches just the retained
+        // window instead of crawling every page since the last stored bar.
+        $lastTs = self::NOW - 120 * 86_400_000;
+        $this->assertSame(
+            BybitPriceFetcher::backfillStartMs('5m', self::LAUNCH_2018, self::NOW),
+            BybitPriceFetcher::incrementalStartMs('5m', $lastTs, self::LAUNCH_2018, self::NOW),
+        );
+        // Lifetime intervals must not leave a gap.
+        $this->assertSame($lastTs, BybitPriceFetcher::incrementalStartMs('1h', $lastTs, self::LAUNCH_2018, self::NOW));
+    }
+
     public function testSubHourlyRetainsNewestWindow(): void
     {
         // Incremental merges only append; the cap must keep the newest bars.

@@ -10,6 +10,7 @@ use common\services\Trading\ChartRenderer;
 use common\services\Trading\DataFetcher;
 use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
+use common\services\Trading\RsiBoard;
 use common\services\Trading\TelegramNotifier;
 use Yii;
 use yii\console\Controller;
@@ -24,7 +25,8 @@ use yii\helpers\Console;
  * queue chains keep running without errors; the data-refresh commands still do
  * real work so the coin charts and the RSI heatmap stay current.
  *
- *   ./yii trading/fetch-data          — refresh prices, derivs, dominance, FNG
+ *   ./yii trading/fetch-data          — refresh prices, derivs, dominance, FNG (+ RSI board)
+ *   ./yii trading/rsi-board           — rebuild the /trading/rsi board from stored data (--force=1: all rows)
  *   ./yii trading/delta-board         — rebuild the DELTA_ALIGNMENT board (run every 5 min)
  *   ./yii trading/schedule-delta      — start the candle-aligned 5-min board loop (queue)
  *   ./yii trading/scan                — no-op stub (signal engine removed)
@@ -50,12 +52,16 @@ final class TradingController extends Controller
     /** @var bool accepted for cron compatibility; unused by the stubs. */
     public bool $includeDormant = false;
 
+    /** @var bool rsi-board: recompute every row, not just symbols whose file changed. */
+    public bool $force = false;
+
     public function options($actionID): array
     {
         return match ($actionID) {
             'scan', 'manage-positions', 'run-daily', 'run-hourly'
                 => ['asOf', 'dryRun', 'includeDormant'],
             'scan-4h', 'run-4h' => ['asOf', 'dryRun'],
+            'rsi-board' => ['force'],
             default => [],
         };
     }
@@ -82,7 +88,22 @@ final class TradingController extends Controller
             );
             $allOk = $allOk && $r->ok;
         }
-        return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+        $boardOk = $this->buildRsiBoard();
+        return $allOk && $boardOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+    }
+
+    /**
+     * Rebuild the precomputed RSI heatmap (/trading/rsi) from the stored
+     * history files — no API calls. Only symbols whose file changed since the
+     * last build are recomputed; --force=1 recomputes every row.
+     *
+     *   ./yii trading/rsi-board
+     *   ./yii trading/rsi-board --force=1
+     */
+    public function actionRsiBoard(): int
+    {
+        $this->stdout("[rsi-board] " . gmdate('c') . "\n", Console::FG_GREEN);
+        return $this->buildRsiBoard($this->force) ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
     }
 
     /**
@@ -347,6 +368,26 @@ final class TradingController extends Controller
             );
             $allOk = $allOk && $res->ok;
         }
-        return $allOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+        $boardOk = $this->buildRsiBoard();
+        return $allOk && $boardOk ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+    }
+
+    /** Rebuild the RSI board and print a one-line OK/FAIL summary. */
+    private function buildRsiBoard(bool $force = false): bool
+    {
+        try {
+            $sum = (new RsiBoard())->build(fn(string $line) => $this->stdout("    $line\n"), $force);
+        } catch (\Throwable $e) {
+            $this->stderr("  FAIL rsi-board     {$e->getMessage()}\n", Console::FG_RED);
+            return false;
+        }
+        $this->stdout(sprintf(
+            "  OK   rsi-board     %.1fs  %d coins  computed=%d  reused=%d\n",
+            $sum['seconds'],
+            $sum['symbols'],
+            $sum['computed'],
+            $sum['reused'],
+        ), Console::FG_GREEN);
+        return true;
     }
 }
