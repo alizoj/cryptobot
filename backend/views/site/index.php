@@ -19,7 +19,6 @@ CSS);
 
 /** @var list<array{icon:string,title:string,desc:string,route:array,accent:string}> $links */
 $links = [
-    ['icon' => '📉', 'title' => Yii::t('app', 'Delta alignment'), 'desc' => Yii::t('app', 'Live SMA15/SMA50 delta screener on 5m/30m/1h/2h — DELTA_ALIGNMENT_SHORT_V1.'), 'route' => ['/trading/delta'], 'accent' => 'danger'],
     ['icon' => '🌡️', 'title' => Yii::t('app', 'RSI heatmap'), 'desc' => Yii::t('app', 'Multi-timeframe Wilder RSI(14) across the whole coin universe.'), 'route' => ['/trading/rsi'], 'accent' => 'success'],
     ['icon' => '🕯️', 'title' => Yii::t('app', 'Symbol chart'), 'desc' => Yii::t('app', 'Interactive candlestick chart for any coin, with multi-coin compare.'), 'route' => ['/trading/chart'], 'accent' => 'warning'],
 ];
@@ -31,10 +30,10 @@ $links = [
         <div class="row align-items-center">
             <div class="col-lg-8">
                 <h1 class="fw-bold mb-2"><?= Yii::t('app', 'Welcome back, {username}', ['username' => Html::encode($username)]) ?></h1>
-                <p class="opacity-75 mb-0"><?= Yii::t('app', 'Crypto market monitor — the delta screener, coin charts and the RSI heatmap. A new signal engine is in the works.') ?></p>
+                <p class="opacity-75 mb-0"><?= Yii::t('app', 'Crypto market monitor — the RSI heatmap and coin charts. A new signal engine is in the works.') ?></p>
             </div>
             <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
-                <?= Html::a(Yii::t('app', 'Open delta screener →'), ['/trading/delta'], ['class' => 'btn btn-light fw-semibold']) ?>
+                <?= Html::a(Yii::t('app', 'Open RSI heatmap →'), ['/trading/rsi'], ['class' => 'btn btn-light fw-semibold']) ?>
             </div>
         </div>
     </div>

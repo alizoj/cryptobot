@@ -66,22 +66,10 @@ final class Paths
         return self::stateDir() . '/fetch_state.json';
     }
 
-    /** Closed-candle SMA sums for the DELTA_ALIGNMENT screener (5-min cron). */
-    public static function deltaBoardFile(): string
-    {
-        return self::stateDir() . '/delta_board.json';
-    }
-
     /** Precomputed RSI heatmap rows — built in the background, read by /trading/rsi. */
     public static function rsiBoardFile(): string
     {
         return self::stateDir() . '/rsi_board.json';
-    }
-
-    /** Short-lived last-price cache shared by concurrent delta-ticks polls. */
-    public static function deltaTickersCacheFile(): string
-    {
-        return self::stateDir() . '/delta_tickers_cache.json';
     }
 
     private static function resolve(string $key, string $fallback): string

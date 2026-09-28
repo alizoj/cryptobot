@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace backend\controllers;
 
 use common\jobs\ScanSignalsJob;
-use common\services\Trading\DeltaAlignment;
 use common\services\Trading\MarketData;
 use common\services\Trading\RsiBoard;
 use Yii;
@@ -25,9 +24,6 @@ use yii\web\Response;
  *   /trading/rsi           multi-timeframe RSI heatmap over the whole universe
  *   /trading/rsi-refresh   POST: queue a background data refresh + board rebuild
  *   /trading/chart         interactive candlestick for a symbol
- *   /trading/delta         DELTA_ALIGNMENT_SHORT_V1 live screener
- *   /trading/delta-ticks   JSON poll target feeding the screener (~1 Hz)
- *   /trading/delta-signal  spec-shaped bot response for one symbol
  */
 final class TradingController extends Controller
 {
@@ -180,63 +176,6 @@ final class TradingController extends Controller
     private static function numOrNull(mixed $v): ?float
     {
         return is_numeric($v) ? (float)$v : null;
-    }
-
-    /**
-     * DELTA_ALIGNMENT_SHORT_V1 screener — live SMA15/SMA50 deltas on
-     * 5m/30m/1h/2h, computed from the live price + the closed-candle sums the
-     * 5-minute board cron maintains (./yii trading/delta-board). The page
-     * renders once with current values and then polls delta-ticks every second.
-     */
-    public function actionDelta(): string
-    {
-        $svc   = new DeltaAlignment();
-        $board = $svc->loadBoard();
-        $rows  = $board !== null ? $svc->computeRows($board, $svc->lastPrices($board)) : [];
-
-        return $this->render('delta', [
-            'rows'         => $rows,
-            'boardUpdated' => $board !== null ? (int)$board['updated'] : null,
-            'meta'         => DeltaAlignment::META,
-        ]);
-    }
-
-    /** JSON poll target for the delta screener: live prices folded into the board. */
-    public function actionDeltaTicks(): Response
-    {
-        $svc   = new DeltaAlignment();
-        $board = $svc->loadBoard();
-        if ($board === null) {
-            return $this->asJson(['ok' => false, 'error' => 'board-missing']);
-        }
-        return $this->asJson([
-            'ok'            => true,
-            'now'           => time(),
-            'board_updated' => (int)$board['updated'],
-            'rows'          => $svc->computeRows($board, $svc->lastPrices($board)),
-        ]);
-    }
-
-    /**
-     * The bot-facing response from the signal spec, for one symbol:
-     *
-     *   /trading/delta-signal?symbol=BTC
-     *   -> {"signal":"DELTA_ALIGNMENT_SHORT_V1","active":true,"bias":"SHORT",...}
-     */
-    public function actionDeltaSignal(string $symbol): Response
-    {
-        $symbol = strtoupper($symbol);
-        $svc    = new DeltaAlignment();
-        $board  = $svc->loadBoard();
-        if ($board === null) {
-            throw new NotFoundHttpException('Delta board not built yet — run ./yii trading/delta-board first.');
-        }
-        foreach ($svc->computeRows($board, $svc->lastPrices($board)) as $row) {
-            if ($row['symbol'] === $symbol || $row['bybit'] === $symbol) {
-                return $this->asJson(DeltaAlignment::specResponse($row));
-            }
-        }
-        throw new NotFoundHttpException("Unknown symbol {$symbol}.");
     }
 
     /** Compared coins are capped to the view's line-color palette. */

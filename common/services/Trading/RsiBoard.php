@@ -18,7 +18,7 @@ use common\services\Trading\Fetcher\BybitHttp;
  * with `./yii trading/rsi-board` — and written to one small JSON file that the
  * page only reads.
  *
- * Two layers, like the delta screener:
+ * Two layers:
  *
  *   - BASE, per symbol: the Wilder state of each timeframe up to its last
  *     stored bar, plus that bar. Derived from the history file, so it is only

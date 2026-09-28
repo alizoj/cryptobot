@@ -37,8 +37,7 @@ final class BybitPriceFetcher
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000; // 2018-01-01 UTC
     /**
      * Only what something reads: 1d/4h/1h/15m feed the RSI heatmap (15m also
-     * the chart's live day candle), D the chart. The delta screener pulls its
-     * own 5m/30m/1h/2h klines straight from Bybit. Every file is rewritten
+     * the chart's live day candle), D the chart. Every file is rewritten
      * whenever its shortest interval closes a bar, so a 5m series here meant
      * rewriting ~150 multi-MB files every 5 minutes.
      */

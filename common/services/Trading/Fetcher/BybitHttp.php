@@ -28,7 +28,7 @@ final class BybitHttp
     /**
      * One handle for the client's lifetime so curl keeps the TLS connection
      * alive between calls — the handshake dominates per-request latency at
-     * our call volumes (a board rebuild is ~150-450 sequential calls).
+     * our call volumes (a price refresh is hundreds of sequential calls).
      */
     private ?\CurlHandle $ch = null;
 

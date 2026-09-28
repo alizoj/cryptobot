@@ -20,7 +20,6 @@ $items = [
         'url' => ['/trading/rsi'],
         'visible' => !Yii::$app->user->isGuest,
         'items' => [
-            ['label' => Yii::t('app', 'Delta alignment'), 'url' => ['/trading/delta']],
             ['label' => Yii::t('app', 'RSI heatmap'), 'url' => ['/trading/rsi']],
             ['label' => Yii::t('app', 'Symbol chart'), 'url' => ['/trading/chart', 'symbol' => 'BTC']],
         ],
