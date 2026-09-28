@@ -55,6 +55,13 @@ final class BinanceFutures
     /** @var array<string, array<string,mixed>>|null symbol => instrument */
     private ?array $index = null;
 
+    /**
+     * A failed first index load, replayed for the rest of this instance's
+     * life: if fapi is unreachable, every unresolved ticker in a run would
+     * otherwise sit through the full retry/timeout cycle again (~1 min each).
+     */
+    private ?\Throwable $indexError = null;
+
     public function __construct(private readonly ?string $indexPath = null, ?string $base = null)
     {
         $base ??= \Yii::$app?->params['trading']['binanceFuturesBase'] ?? null;
@@ -158,6 +165,9 @@ final class BinanceFutures
         if ($this->index !== null) {
             return $this->index;
         }
+        if ($this->indexError !== null) {
+            throw $this->indexError;
+        }
         $path = $this->indexPath;
         $cached = $path !== null && is_file($path);
         if ($cached && time() - (int)filemtime($path) < self::INDEX_MAX_AGE_SEC) {
@@ -187,7 +197,7 @@ final class BinanceFutures
             return $this->index = $index;
         } catch (\Throwable $e) {
             if (!$cached) {
-                throw $e;
+                throw $this->indexError = $e;
             }
             return $this->index = json_decode((string)file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
         }

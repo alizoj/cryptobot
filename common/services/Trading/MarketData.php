@@ -26,7 +26,7 @@ final class MarketData
      * raw record holds candles as positional tuples; building the keyed arrays
      * is the hot cost when a caller hits the same symbol repeatedly (the live
      * scan re-derives daily candles 3–4× per symbol; the gate backtester calls
-     * the 4h/1h/weekly accessors once per historical row). Invalidated whenever
+     * the 4h/1h accessors once per historical row). Invalidated whenever
      * the cached symbol changes.
      *
      * @var array<string, list<array<string,float|int>>>
@@ -145,12 +145,6 @@ final class MarketData
     public function fifteenMinCandles(string $symbol): array
     {
         return $this->intervalCandles($symbol, '15m');
-    }
-
-    /** @return list<array{ts:int,o:float,h:float,l:float,c:float,v:float}> weekly (interval W) */
-    public function weeklyCandles(string $symbol): array
-    {
-        return $this->intervalCandles($symbol, 'W');
     }
 
     /**

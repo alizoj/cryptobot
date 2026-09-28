@@ -101,6 +101,35 @@ final class BybitPriceFetcherTest extends Unit
         }
     }
 
+    public function testNewSymbolsThatFailedBeforeGoLast(): void
+    {
+        // A1..A3 new and previously failed, B1/B2 new and never tried, OLD has
+        // history (a failure record on it — e.g. a transient fetch error — must not move it).
+        $symbols  = ['OLD', 'A1', 'A2', 'B1', 'A3', 'B2'];
+        $failures = ['A1' => [], 'A2' => [], 'A3' => [], 'OLD' => []];
+        $hasFile  = static fn(string $s): bool => $s === 'OLD';
+
+        $this->assertSame(
+            ['OLD', 'B1', 'B2', 'A1', 'A2', 'A3'],
+            BybitPriceFetcher::backfillOrder($symbols, $failures, $hasFile),
+            'never-tried new symbols get the capped backfill slots before repeat failures',
+        );
+        $this->assertSame($symbols, BybitPriceFetcher::backfillOrder($symbols, [], $hasFile));
+    }
+
+    public function testRetiredIntervalsAreDroppedOnRewrite(): void
+    {
+        $existing = array_fill_keys(['D', 'W', '4h', '2h', '1h', '30m', '15m', '5m'], ['rows' => []]);
+
+        $kept = BybitPriceFetcher::keptIntervals($existing, BybitPriceFetcher::DEFAULT_INTERVALS);
+        $this->assertSame(['D', '4h', '1h', '15m'], array_keys($kept), 'W/2h/30m/5m are never refreshed again — drop them');
+
+        // A run asked for an extra interval keeps it; one asked for a subset
+        // must not wipe the maintained intervals it didn't fetch.
+        $this->assertArrayHasKey('5m', BybitPriceFetcher::keptIntervals($existing, ['5m']));
+        $this->assertSame(['D', '4h', '1h', '15m'], array_keys(BybitPriceFetcher::keptIntervals($existing, ['D'])));
+    }
+
     /** @return list<list<string>> $n positional kline rows, ts = row index */
     private function rows(int $n): array
     {

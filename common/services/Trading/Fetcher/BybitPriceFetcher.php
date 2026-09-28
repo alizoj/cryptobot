@@ -10,16 +10,16 @@ use Throwable;
 use Yii;
 
 /**
- * Pull lifetime OHLCV candles (daily, weekly, 4h, 2h, 1h, 30m, 15m, 5m by
- * default) for every HashHedge-listed symbol from the Bybit V5 public API and
- * write them out to common/data/history_prices/<SYMBOL>.json. Tickers Bybit
- * doesn't list fall back to Binance USD-M futures ({@see BinanceFutures}),
- * stored in the same row shape with bybit_category = 'binance_um'. The 2h/30m/15m/5m
- * intervals are kept for short multi-timeframe indicators (15m feeds the RSI
- * heatmap's lowest timeframe).
+ * Pull lifetime OHLCV candles (daily, 4h, 1h and 15m by default — what the RSI
+ * heatmap and the chart read) for every HashHedge-listed symbol from the Bybit
+ * V5 public API and write them out to common/data/history_prices/<SYMBOL>.json.
+ * Tickers Bybit doesn't list fall back to Binance USD-M futures
+ * ({@see BinanceFutures}), stored in the same row shape with bybit_category =
+ * 'binance_um'. Intervals outside the fetched set are dropped from a file the
+ * next time it is written ({@see keptIntervals}).
  *
  * Lifetime history is fetched for 1h-and-longer intervals; sub-hourly ones
- * (30m/15m/5m) backfill only a recent window ({@see backfillStartMs}) — crawling
+ * (15m) backfill only a recent window ({@see backfillStartMs}) — crawling
  * them from a 2018 launch would blow past the KLINE page cap and never reach
  * the present.
  *
@@ -35,7 +35,14 @@ final class BybitPriceFetcher
 {
     public const KLINE_LIMIT = 1000;
     public const FALLBACK_LAUNCH_MS = 1_514_764_800_000; // 2018-01-01 UTC
-    public const DEFAULT_INTERVALS = ['D', 'W', '4h', '2h', '1h', '30m', '15m', '5m'];
+    /**
+     * Only what something reads: 1d/4h/1h/15m feed the RSI heatmap (15m also
+     * the chart's live day candle), D the chart. The delta screener pulls its
+     * own 5m/30m/1h/2h klines straight from Bybit. Every file is rewritten
+     * whenever its shortest interval closes a bar, so a 5m series here meant
+     * rewriting ~150 multi-MB files every 5 minutes.
+     */
+    public const DEFAULT_INTERVALS = ['D', '4h', '1h', '15m'];
 
     /**
      * Recent-window size, in bars, for sub-hourly backfills (see
@@ -144,6 +151,9 @@ final class BybitPriceFetcher
         $failures = $this->loadFailures($failuresFile);
         // Drop failure entries for symbols no longer on the master list.
         $failures = array_intersect_key($failures, array_flip(array_map('strtoupper', $masterSymbols)));
+        if ($maxNew !== null) {
+            $symbols = self::backfillOrder($symbols, $failures, static fn(string $s): bool => file_exists("$outDir/$s.json"));
+        }
         $success = 0;
         $fetched = 0;
         $skipped = 0;
@@ -231,7 +241,10 @@ final class BybitPriceFetcher
 
             try {
                 $launchTime = (int)($inst['launchTime'] ?? '0') ?: self::FALLBACK_LAUNCH_MS;
-                $intervalsMap = $existingIntervals;
+                $intervalsMap = self::keptIntervals($existingIntervals, $intervals);
+                if (count($intervalsMap) < count($existingIntervals)) {
+                    $log('           dropped unused: ' . implode(',', array_keys(array_diff_key($existingIntervals, $intervalsMap))));
+                }
                 foreach ($needed as $label) {
                     if (isset($incrementalStart[$label])) {
                         $existingRows = $existingIntervals[$label]['rows'] ?? [];
@@ -430,7 +443,7 @@ final class BybitPriceFetcher
      * Sub-hourly intervals (30m/15m/5m/...) would need far more than the KLINE
      * page cap (see {@see fetchLifetimeKlines}'s $safety guard) to crawl from a
      * 2018 launch to the present, so they start from a recent window of
-     * SHORT_BACKFILL_BARS bars instead — enough for the DELTA_ALIGNMENT screener
+     * SHORT_BACKFILL_BARS bars instead — enough for the RSI heatmap's 250 × 15m
      * with margin, and bounded to a few API pages. Clamped to $launchMs so a
      * brand-new listing never asks for bars before it existed. Once the first
      * windowed fetch reaches the present, later runs resume from the last
@@ -457,6 +470,47 @@ final class BybitPriceFetcher
     public static function incrementalStartMs(string $label, int $lastTs, int $launchMs, int $nowMs): int
     {
         return max($lastTs, self::backfillStartMs($label, $launchMs, $nowMs));
+    }
+
+    /**
+     * Processing order under a per-run backfill cap: symbols with no history
+     * that already failed move to the back (order otherwise kept). A new
+     * symbol that fails after resolving still takes a cap slot, so without
+     * this a few that keep failing (write error, exchange rejecting the pair)
+     * would take every slot on every run and starve the rest of the list.
+     *
+     * @param list<string> $symbols
+     * @param array<string, mixed> $failures symbol => last failure
+     * @param callable(string):bool $hasHistory
+     * @return list<string>
+     */
+    public static function backfillOrder(array $symbols, array $failures, callable $hasHistory): array
+    {
+        $front = [];
+        $back = [];
+        foreach ($symbols as $s) {
+            if (isset($failures[$s]) && !$hasHistory($s)) {
+                $back[] = $s;
+            } else {
+                $front[] = $s;
+            }
+        }
+        return [...$front, ...$back];
+    }
+
+    /**
+     * The stored intervals to carry into a rewrite: those this app maintains
+     * (DEFAULT_INTERVALS) plus any this run was asked for. Anything else —
+     * e.g. the retired W/2h/30m/5m series — would never be refreshed again,
+     * so it is dropped rather than left to go stale and bloat the file.
+     *
+     * @param array<string, array<string,mixed>> $existing label => interval entry
+     * @param list<string> $requested
+     * @return array<string, array<string,mixed>>
+     */
+    public static function keptIntervals(array $existing, array $requested): array
+    {
+        return array_intersect_key($existing, array_flip([...self::DEFAULT_INTERVALS, ...$requested]));
     }
 
     /**

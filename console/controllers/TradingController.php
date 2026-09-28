@@ -310,7 +310,7 @@ final class TradingController extends Controller
      * queue first.
      *
      *   ./yii trading/schedule-refresh        # every 60s (default)
-     *   ./yii trading/schedule-refresh 300    # every 5 min (aligns with the 5m floor)
+     *   ./yii trading/schedule-refresh 300    # every 5 min (RSI page prices at most ~5 min old)
      *   ./yii queue/listen --verbose=1        # worker that runs the jobs
      */
     public function actionScheduleRefresh(int $intervalSeconds = 60): int
