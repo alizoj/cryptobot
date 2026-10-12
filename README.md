@@ -1,259 +1,324 @@
-<p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="https://www.yiiframework.com/image/design/logo/yii3_full_for_dark.svg">
-        <source media="(prefers-color-scheme: light)" srcset="https://www.yiiframework.com/image/design/logo/yii3_full_for_light.svg">
-        <img src="https://www.yiiframework.com/image/design/logo/yii3_full_for_light.svg" alt="Yii Framework" height="100">
-    </picture>
-    <h1 align="center">Yii 2 Advanced Project Template</h1>
-    <br>
-</p>
+# Crypto Market Monitor
 
-Yii 2 Advanced Project Template is a skeleton [Yii 2](https://www.yiiframework.com/) application best for
-developing complex Web applications with multiple tiers.
+A self-hosted market monitor for the HashHedge instrument list. It keeps a local
+archive of price, derivatives and macro data and serves two views on top of it:
+a multi-timeframe **RSI heatmap** across the whole universe and an interactive
+**candlestick / comparison chart** for any coin.
 
-The template includes three tiers: front end, back end, and console, each of which
-is a separate Yii application.
+Built on the [Yii 2 Advanced Project Template](https://www.yiiframework.com/extension/yiisoft/yii2-app-advanced)
+(PHP 8.5, PostgreSQL, Redis).
 
-The template is designed to work in a team development environment. It supports
-deploying the application in different environments.
+> **Status.** The trade-signal engine (setup scans, position management, the
+> signals dashboard) has been removed while a new strategy is being built. What
+> runs today is the data pipeline and the read-only market views. The old
+> `trading/scan`, `trading/scan-4h` and `trading/manage-positions` commands are
+> kept as no-op stubs so existing cron lines and queue chains exit cleanly.
 
-Documentation is at [docs/guide/README.md](docs/guide/README.md).
+## Purpose
 
-[![Latest Stable Version](https://img.shields.io/packagist/v/yiisoft/yii2-app-advanced.svg?style=for-the-badge&label=Stable&logo=packagist)](https://packagist.org/packages/yiisoft/yii2-app-advanced)
-[![Total Downloads](https://img.shields.io/packagist/dt/yiisoft/yii2-app-advanced.svg?style=for-the-badge&label=Downloads)](https://packagist.org/packages/yiisoft/yii2-app-advanced)
-[![build](https://img.shields.io/github/actions/workflow/status/yiisoft/yii2-app-advanced/build.yml?style=for-the-badge&logo=github&label=Build)](https://github.com/yiisoft/yii2-app-advanced/actions?query=workflow%3Abuild)
-[![Static Analysis](https://img.shields.io/github/actions/workflow/status/yiisoft/yii2-app-advanced/static.yml?style=for-the-badge&label=Static)](https://github.com/yiisoft/yii2-app-advanced/actions/workflows/static.yml)
+- **Collect.** Pull OHLCV candles (1d / 4h / 1h / 15m), funding-rate and
+  open-interest history for 172 tickers (136 crypto + 36 TradFi) from the Bybit
+  V5 public API, falling back to Binance USD-M futures for tickers Bybit doesn't
+  list. Add BTC dominance / market cap (CoinMarketCap) and the Fear & Greed
+  index (alternative.me).
+- **Keep it fresh.** A Redis queue job refreshes the data on a self-rescheduling
+  loop — no cron. Fetches are incremental, so a run where no candle has closed
+  costs a few disk reads and no HTTP calls.
+- **Show it.** A login-protected backend renders the RSI heatmap and the charts
+  from precomputed files, so pages never wait on an exchange API.
+- **Be the base for the next strategy.** The stored history and the research in
+  [`CRYPTO.md`](CRYPTO.md) / [`TRADE.md`](TRADE.md) are what the new signal
+  engine will be built on.
 
-## Docker
+## How it works
 
-[![Apache](https://img.shields.io/github/actions/workflow/status/yiisoft/yii2-app-advanced/docker.yml?style=for-the-badge&logo=apache&label=Apache)](https://github.com/yiisoft/yii2-app-advanced/actions/workflows/docker.yml)
+```
+Bybit V5 ─┐
+Binance ──┼─► DataFetcher ─► common/data/history_prices/<SYMBOL>.json ─┐
+CMC ──────┤                  common/data/history/macro/*.jsonl         │
+alt.me ───┘                                                            ▼
+                                             RsiBoard::build() + live Bybit tickers
+                                                                       │
+                                                                       ▼
+                                        common/data/trade_state/rsi_board.json
+                                                                       │
+                                             /trading/rsi  ◄───────────┴──► /trading/chart
+```
 
-REQUIREMENTS
-------------
+`common\jobs\ScanSignalsJob` runs the whole chain: refresh prices and
+derivatives, refresh the macro series when they are more than 12 hours old,
+rebuild the RSI board, then re-enqueue itself for the next run.
 
-> [!IMPORTANT]
-> - The minimum required [PHP](https://www.php.net/) version of Yii is PHP `8.2`.
+## Requirements
 
-## Install via Composer
+- PHP **8.5+** with the `curl` and `pdo_pgsql` extensions
+- [Composer](https://getcomposer.org/)
+- PostgreSQL — holds user accounts only; market data lives in files
+- Redis — backs the backend session, the cache and the job queue, so nothing
+  works without it
+- A web server (Nginx or Apache) with `backend/web` as the document root
+- About 2 GB of disk for the price history
+- Outbound HTTPS to `api.bytick.com` (Bybit mirror), `fapi.binance.com`,
+  `api.coinmarketcap.com` and `api.alternative.me`; plus `api.telegram.org` and
+  `quickchart.io` if you use the Telegram commands
 
-If you do not have [Composer](https://getcomposer.org/), you may install it by following the instructions
-at [getcomposer.org](https://getcomposer.org/doc/00-intro.md#installation-nix).
+Check `php -v` before you start: Composer's platform check stops every command
+with a fatal error on anything older than 8.5.
 
-You can then install this project template using the following commands:
+## Installation
 
 ```bash
-composer create-project --prefer-dist yiisoft/yii2-app-advanced advanced
-cd advanced
+composer install
+php init --env=Development --overwrite=All   # creates ./yii, the *-local.php configs and web/index.php
 ```
 
-### Frontend
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/frontend/home-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/frontend/home-light.png">
-    <img src="docs/images/frontend/home-light.png" alt="Web Application Advanced - Frontend">
-</picture>
-
-### Backend
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/backend/home-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="docs/images/backend/home-light.png">
-    <img src="docs/images/backend/home-light.png" alt="Web Application Advanced - Backend">
-</picture>
-
-DIRECTORY STRUCTURE
--------------------
-
-```
-common
-    config/              contains shared configurations
-    mail/                contains view files for e-mails
-    models/              contains model classes used in both backend and frontend
-    tests/               contains tests for common classes
-console
-    config/              contains console configurations
-    controllers/         contains console controllers (commands)
-    migrations/          contains database migrations
-    models/              contains console-specific model classes
-    runtime/             contains files generated during runtime
-backend
-    assets/              contains application assets such as JavaScript and CSS
-    config/              contains backend configurations
-    controllers/         contains Web controller classes
-    models/              contains backend-specific model classes
-    runtime/             contains files generated during runtime
-    tests/               contains tests for backend application
-    views/               contains view files for the Web application
-    web/                 contains the entry script and Web resources
-frontend
-    assets/              contains application assets such as JavaScript and CSS
-    config/              contains frontend configurations
-    controllers/         contains Web controller classes
-    models/              contains frontend-specific model classes
-    runtime/             contains files generated during runtime
-    tests/               contains tests for frontend application
-    views/               contains view files for the Web application
-    web/                 contains the entry script and Web resources
-    widgets/             contains frontend widgets
-vendor/                  contains dependent 3rd-party packages
-environments/            contains environment-based overrides
-```
-
-Initialize the application for the `Development` environment:
-
-```bash
-php init --env=Development --overwrite=All
-```
-
-Now you should be able to access the application through the following URLs, assuming `advanced` is the directory
-directly under the Web root.
-
-```
-http://localhost/advanced/frontend/web/
-http://localhost/advanced/backend/web/
-```
-
-## Install with Docker
-
-Build and start the containers:
-
-```bash
-docker compose up -d --build
-```
-
-Install dependencies inside the container:
-
-```bash
-docker compose exec frontend composer update --prefer-dist --no-interaction
-```
-
-Initialize the application for the `Development` environment:
-
-```bash
-docker compose exec frontend php /app/init --env=Development --overwrite=All
-```
-
-After running `init`, update the database connection in `common/config/main-local.php` to use the `mysql`
-service hostname:
-
-```php
-'db' => [
-    'class' => \yii\db\Connection::class,
-    'dsn' => 'mysql:host=mysql;dbname=yii2advanced',
-    'username' => 'yii2advanced',
-    'password' => 'secret',
-    'charset' => 'utf8',
-],
-```
-
-You can then access the application through the following URLs:
-
-```
-http://127.0.0.1:20080  (frontend)
-http://127.0.0.1:21080  (backend)
-```
-
-To run the test suite, also update `common/config/test-local.php` to use the `mysql` hostname and create the
-test database:
-
-```php
-'db' => [
-    'dsn' => 'mysql:host=mysql;dbname=yii2advanced_test',
-],
-```
-
-```bash
-docker compose exec -T mysql mysql -uroot -pverysecret -e "CREATE DATABASE IF NOT EXISTS yii2advanced_test; GRANT ALL PRIVILEGES ON yii2advanced_test.* TO 'yii2advanced'@'%'; FLUSH PRIVILEGES;"
-docker compose exec -T frontend php /app/yii_test migrate --interactive=0
-docker compose exec -T frontend vendor/bin/codecept build
-docker compose exec -T frontend vendor/bin/codecept run
-```
-
-**NOTES:**
-- Minimum required Docker engine version `17.04` for development (see [Performance tuning for volume mounts](https://docs.docker.com/docker-for-mac/osxfs-caching/))
-- The default configuration uses a host-volume in your home directory `~/.composer-docker/cache` for Composer caches
-
-CONFIGURATION
--------------
-
-## Database
-
-Edit the file `common/config/main-local.php` with real data, for example:
-
-```php
-return [
-    'components' => [
-        'db' => [
-            'class' => \yii\db\Connection::class,
-            'dsn' => 'mysql:host=localhost;dbname=yii2advanced',
-            'username' => 'root',
-            'password' => '1234',
-            'charset' => 'utf8',
-        ],
-    ],
-];
-```
-
-When using Docker, the MySQL service is pre-configured. Update `common/config/main-local.php` to use:
-
-```php
-'db' => [
-    'class' => \yii\db\Connection::class,
-    'dsn' => 'mysql:host=mysql;dbname=yii2advanced',
-    'username' => 'yii2advanced',
-    'password' => 'secret',
-    'charset' => 'utf8',
-],
-```
-
-Apply migrations:
+`init` writes `common/config/main-local.php` with a PostgreSQL connection
+(`crypto` database on `127.0.0.1:5432`) and a Redis connection
+(`127.0.0.1:6379`, database 0). Edit that file to match your servers, create
+the database, then apply the migrations:
 
 ```bash
 php yii migrate
 ```
 
-Or with Docker:
+Point a virtual host at `backend/web`. Pretty URLs are on, so every request
+that isn't a real file must be rewritten to `index.php`:
 
-```bash
-docker compose exec frontend php /app/yii migrate
+```nginx
+location / {
+    try_files $uri $uri/ /index.php$is_args$args;
+}
 ```
 
-**NOTES:**
-- Yii won't create the database for you, this has to be done manually before you can access it.
-  When using Docker, the MySQL service creates the database automatically.
-- Check and edit the other files in the `config/` directories to customize your application as required.
-- Refer to the README in the `tests` directory for information specific to application tests.
+`vagrant/nginx/app.conf` has a complete server block to copy from.
 
-TESTING
--------
+### Accounts
 
-Tests are located in `frontend/tests`, `backend/tests`, and `common/tests` directories.
-They are developed with [Codeception PHP Testing Framework](https://codeception.com/).
+Every backend page requires a login. The migrations seed a view-only `guest`
+account; its password is the one hashed in
+`console/migrations/m260602_120000_add_user_role_and_guest.php` — change it
+before the backend is reachable from outside.
 
-Tests can be executed by running:
+To create your own account, point a second virtual host at `frontend/web` (the
+stock Yii template site), sign up there and open the verification link. In the
+Development environment mail is not sent: the message is written to
+`frontend/runtime/mail/`. Accounts have a `role` column (`admin` / `guest`);
+new sign-ups get `guest`, and nothing in the backend is restricted by role yet.
+
+## Running it
+
+**1. Pull the history once.** The first run downloads lifetime daily / 4h / 1h
+candles and a recent 15m window for every ticker — roughly half a minute per
+symbol:
 
 ```bash
-vendor/bin/codecept run --env php-builtin
+php yii trading/fetch-data
 ```
 
-Or using the Composer script:
+**2. Start the worker.** This is the only long-lived process; it runs queued
+jobs, including delayed ones:
 
 ```bash
-composer tests
+php yii queue/listen --verbose=1
 ```
 
-## Support the project
+**3. Start the refresh loop.** Run one of these once:
 
-[![Open Collective](https://img.shields.io/badge/Open%20Collective-sponsor-7eadf1?style=for-the-badge&logo=open%20collective&logoColor=7eadf1&labelColor=555555)](https://opencollective.com/yiisoft)
+```bash
+php yii trading/schedule-refresh        # every 60 s
+php yii trading/schedule-refresh 300    # every 5 min
+php yii trading/schedule-hourly         # every hour
+```
 
-## Follow updates
+Running a schedule command again replaces the previous loop instead of adding a
+second one, so it is also how you change the interval. The pending job lives in
+Redis, so the loop survives a worker restart.
 
-[![Official website](https://img.shields.io/badge/Powered_by-Yii_Framework-green.svg?style=for-the-badge&logo=yii)](https://www.yiiframework.com/)
-[![Follow on X](https://img.shields.io/badge/-Follow%20on%20X-1DA1F2.svg?style=for-the-badge&logo=x&logoColor=white&labelColor=000000)](https://x.com/yiiframework)
-[![Telegram](https://img.shields.io/badge/telegram-join-1DA1F2?style=for-the-badge&logo=telegram)](https://t.me/yii_framework_in_english)
-[![Slack](https://img.shields.io/badge/slack-join-1DA1F2?style=for-the-badge&logo=slack)](https://yiiframework.com/go/slack)
+**4. Open the backend** and log in.
+
+## Using the backend
+
+### RSI heatmap — `/trading/rsi`
+
+One row per coin: last price, rolling 24h change, Wilder RSI(14) on 1d / 4h /
+1h / 15m and the 20-day average daily turnover. The candle still forming on
+each timeframe is priced at the live Bybit last price.
+
+- Cells tint green toward oversold and red toward overbought.
+- The default sort ranks coins by oversold (≤ 30) / neutral / overbought (≥ 70)
+  on 1d first, then 4h, 1h and 15m, with oversold on top. Click a column header
+  to sort by that column, e.g. `/trading/rsi?sort=1h&dir=desc`.
+- **↻ Refresh** queues a one-off refresh; reload once the worker has run it.
+- **thin** marks a coin whose 20-day average daily turnover is under $5M;
+  **stale** marks a coin whose candles stopped updating.
+- A warning banner appears when prices are more than 30 minutes old or the
+  newest candle is more than 2 hours old — the worker or the loop isn't running.
+
+### Chart — `/trading/chart`
+
+| URL | Shows |
+|---|---|
+| `/trading/chart` | BTC daily candles |
+| `/trading/chart?symbol=SOL&zoom=60` | SOL, last 60 days visible (`zoom` is 14–365) |
+| `/trading/chart?symbols=BTC,ETH,SOL&zoom=90` | Up to 8 coins as % change since the start of the visible window |
+| `/trading/chart?symbol=BTC&entry=65000&stop=62000&side=long&setup=L1&asOf=2026-05-26` | Entry and stop lines plus a marker on the signal day |
+
+Single-coin charts also draw the three most recent support and resistance
+levels. The chart library loads from `unpkg.com`, so the browser needs internet
+access.
+
+The header has an EN / RU language switch and a light / dark theme toggle.
+
+## Console commands
+
+| Command | What it does |
+|---|---|
+| `php yii trading/fetch-data` | Full refresh: prices, derivatives, dominance, Fear & Greed, then the RSI board |
+| `php yii trading/run-hourly` | Incremental prices + derivatives refresh, then the RSI board (`run-4h` is identical) |
+| `php yii trading/run-daily` | Same as `fetch-data` |
+| `php yii trading/rsi-board` | Rebuild the RSI board from stored data; `--force=1` recomputes every row |
+| `php yii trading/schedule-refresh [seconds]` | Start or replace the refresh loop (default 60 s) |
+| `php yii trading/schedule-hourly` | Start or replace the refresh loop at 3600 s |
+| `php yii trading/queue-scan` | Queue one refresh without touching the loop |
+| `php yii queue/listen --verbose=1` | The worker |
+| `php yii queue/info` | Waiting / delayed / reserved / done counts |
+| `php yii queue/clear --interactive=0` | Drop every queued job, including the loop |
+| `php yii trading/test-telegram` | Send a test message to the configured channel |
+| `php yii trading/test-chart BTC` | Render a chart with QuickChart and send it to Telegram |
+| `php yii trading/scan`, `scan-4h`, `manage-positions` | No-op stubs for the removed signal engine |
+
+`fetch-data` and the `run-*` commands refresh the data directly, without the
+queue or a worker, so they suit cron if you prefer it to the refresh loop.
+
+## Configuration
+
+Defaults are in `common/config/params.php`. Override them in
+`common/config/params-local.php`, which is not committed:
+
+```php
+return [
+    'telegram' => [
+        'botToken' => '1234567890:AAH...',   // from @BotFather
+        'chatId'   => '-1001234567890',      // channel id, or '@your_channel'
+    ],
+    'trading' => [
+        // 'bybitApiBase' => 'https://api.bybit.com',   // default is the api.bytick.com mirror
+    ],
+];
+```
+
+| Key | Default | Purpose |
+|---|---|---|
+| `telegram.botToken`, `telegram.chatId` | empty | Needed only for the `test-telegram` / `test-chart` commands |
+| `chart.quickChartBase` | `https://quickchart.io` | Renderer for Telegram chart images |
+| `trading.bybitApiBase` | `https://api.bytick.com` | Bybit V5 host |
+| `trading.historyDir` | `@common/data/history_prices` | Per-symbol history files |
+| `trading.macroDir` | `@common/data/history/macro` | Dominance and Fear & Greed series |
+| `trading.stateDir` | `@common/data/trade_state` | RSI board and fetch checkpoint |
+
+### The coin universe
+
+`common/data/hashhedge_symbols.json` is the master list of tickers. Add a
+ticker there and the refresh loop backfills it — at most 8 new symbols per run,
+so a large change fills in over several runs. Remove a ticker and it drops off
+the heatmap at the next build.
+
+Tickers resolve to `<TICKER>USDT` on Bybit, spot first and then the linear
+perpetual. Exceptions go in `common/data/bybit_symbol_overrides.json` (for
+example `PEPE` → `1000PEPEUSDT`).
+
+## Data files
+
+Everything under `common/data/` except the two JSON files above is generated
+and gitignored. The web server user and the worker user both need write access.
+
+| Path | Contents |
+|---|---|
+| `history_prices/<SYMBOL>.json` | Candles per interval plus funding and open-interest history |
+| `history/macro/dominance.jsonl` | BTC dominance, total / alt market cap, 24h volume |
+| `history/macro/fng.jsonl` | Fear & Greed index |
+| `trade_state/rsi_board.json` | Precomputed heatmap rows |
+| `trade_state/fetch_state.json` | Result of the last fetch, per step |
+
+To force a full re-pull of one symbol, delete its file in `history_prices/` and
+run `php yii trading/fetch-data`.
+
+## Production
+
+```bash
+php init --env=Production --overwrite=All
+```
+
+Set the database password in `common/config/main-local.php`, run the
+migrations, and keep exactly one worker alive. With supervisor:
+
+```ini
+[program:crypto-queue]
+command=/usr/bin/php /path/to/project/yii queue/listen --verbose=1
+directory=/path/to/project
+user=www-data
+autostart=true
+autorestart=true
+stopwaitsecs=60
+stdout_logfile=/path/to/project/console/runtime/logs/queue.log
+redirect_stderr=true
+```
+
+Then start the loop once with `php yii trading/schedule-refresh`. Errors from
+the worker are logged to `console/runtime/logs/app.log`.
+[`docs/TRADING_BOT_SETUP.md`](docs/TRADING_BOT_SETUP.md) §4.3 covers keeping
+the worker alive on Windows (NSSM or Task Scheduler).
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `Your Composer dependencies require a PHP version ">= 8.5.0"` | The `php` on your PATH is older. Call the 8.5 binary explicitly. |
+| Every backend page errors with a Redis connection failure | Redis is down or `common/config/main-local.php` points at the wrong host. |
+| Heatmap says the board hasn't been built | Run `php yii trading/fetch-data`. |
+| Red "prices … old" on the heatmap | Start the worker and the refresh loop. |
+| "Refresh queued…" never clears | No worker is running. The flag expires on its own after 15 minutes. |
+| Fetches take several seconds per request | Switch `trading.bybitApiBase` between `api.bytick.com` and `api.bybit.com`. |
+
+## Development
+
+```bash
+php vendor/bin/codecept run Unit Services -c common   # fetcher, market-data and RSI board tests
+composer static                                       # PHPStan
+composer cs                                           # PHP_CodeSniffer
+```
+
+| Path | Contents |
+|---|---|
+| `common/services/Trading/` | Fetchers, `MarketData`, `RsiBoard`, `TelegramNotifier`, `ChartRenderer` |
+| `common/jobs/ScanSignalsJob.php` | The queued refresh job |
+| `console/controllers/TradingController.php` | The `trading/*` commands |
+| `backend/controllers/TradingController.php`, `backend/views/trading/` | Heatmap and chart pages |
+| `common/data/` | Symbol lists and all generated data |
+| `frontend/` | Unmodified Yii template site, used only for sign-up |
+
+`docker-compose.yml`, the two `Dockerfile`s and the Vagrant setup are leftovers
+from the Yii template (PHP 8.4 / 7.4, MySQL, no Redis) and will not run this
+project as they are.
+
+## Research and background
+
+These documents describe the removed signal engine and the analysis behind it.
+They are reference material for the next strategy, not a description of what
+the code does today.
+
+- [`CRYPTO.md`](CRYPTO.md) ([RU](CRYPTO_RU.md)) — pump / dump pattern analysis
+  over price, funding, open interest and macro data
+- [`TRADE.md`](TRADE.md) ([RU](TRADE_RU.md)) — the entry and stop playbook
+  derived from it
+- [`TRADE_SIMULATION_RESULT.md`](TRADE_SIMULATION_RESULT.md) and
+  [`docs/results/`](docs/results/README.md) — backtests and the experiment log
+- [`signal_algorithm_ru.md`](signal_algorithm_ru.md) — mathematical description
+  of a signal-detection algorithm (Russian)
+- [`docs/TRADING_BOT_SETUP.md`](docs/TRADING_BOT_SETUP.md) — setup guide for the
+  old bot; the queue and worker sections still apply, the scan, position and
+  dashboard sections do not
 
 ## License
 
-[![License](https://img.shields.io/badge/License-BSD--3--Clause-brightgreen.svg?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=555555)](LICENSE.md)
+BSD-3-Clause, inherited from the Yii template — see [`LICENSE.md`](LICENSE.md).
